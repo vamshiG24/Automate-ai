@@ -7,6 +7,13 @@ import {
 
 import Agent from "../models/agent.model.js";
 import { deductCredits } from "../utils/deductCredits.js";
+import {
+  getCreditCost,
+  hasEnoughCredits,
+  insufficientCreditsResponse,
+} from "../utils/credits.js";
+import { saveConversation } from "../utils/conversation.js";
+import { withRateLimitRetry } from "../services/rateLimitRetry.js";
 
 const getScopedThreadId = ({ userId, agentId, threadId }) =>
   [userId.toString(), agentId.toString(), threadId].join(":");
@@ -77,6 +84,13 @@ export const chatWithAgent = async (req, res) => {
       });
     }
 
+    const cost = getCreditCost("agentChat");
+
+    // Check credits before the agent runs any LLM call or tool
+    if (!hasEnoughCredits(req.user, cost)) {
+      return insufficientCreditsResponse(res, cost);
+    }
+
     const conversationId =
       threadId || new mongoose.Types.ObjectId().toString();
 
@@ -86,14 +100,27 @@ export const chatWithAgent = async (req, res) => {
       threadId: conversationId,
     });
 
-    const result = await runAgentGraph({
-      agent,
-      message: message.trim(),
-      threadId: scopedThreadId,
-      userId,
-    });
-      console.log(result)
+    const result = await withRateLimitRetry(
+      () =>
+        runAgentGraph({
+          agent,
+          message: message.trim(),
+          threadId: scopedThreadId,
+          userId,
+        }),
+      { agent, threadId: scopedThreadId, userId, label: "Agent chat" }
+    );
+
     if (result.interrupted) {
+      await saveConversation({
+        userId,
+        threadId: conversationId,
+        checkpointThreadId: scopedThreadId,
+        agent,
+        userMessage: message.trim(),
+        pendingApproval: result.interrupts,
+      });
+
       return res.status(202).json({
         success: true,
         data: {
@@ -105,10 +132,20 @@ export const chatWithAgent = async (req, res) => {
         },
       });
     }
-      await deductCredits({
-          userId,
-          credits: 10,
-        });
+    const { remainingCredits } = await deductCredits({
+      userId,
+      credits: cost,
+    });
+
+    await saveConversation({
+      userId,
+      threadId: conversationId,
+      checkpointThreadId: scopedThreadId,
+      agent,
+      userMessage: message.trim(),
+      reply: result.reply,
+    });
+
     return res.status(200).json({
       success: true,
       data: {
@@ -118,6 +155,8 @@ export const chatWithAgent = async (req, res) => {
         requiresApproval: false,
         reply: result.reply,
         model: result.model,
+        autoApprovals: result.autoApprovals,
+        remainingCredits,
       },
     });
   } catch (error) {
@@ -177,20 +216,39 @@ export const approveEmail = async (req, res) => {
       });
     }
 
+    const cost = getCreditCost("approval");
+
+    // Rejecting is free; approving runs the tool, so it needs credits
+    if (approved && !hasEnoughCredits(req.user, cost)) {
+      return insufficientCreditsResponse(res, cost);
+    }
+
     const scopedThreadId = getScopedThreadId({
       userId,
       agentId: agent._id,
       threadId,
     });
 
-    const result = await resumeAgentGraph({
-      agent,
-      threadId: scopedThreadId,
-      userId,
-      approved,
-    });
+    const result = await withRateLimitRetry(
+      () =>
+        resumeAgentGraph({
+          agent,
+          threadId: scopedThreadId,
+          userId,
+          approved,
+        }),
+      { agent, threadId: scopedThreadId, userId, label: "Agent approval" }
+    );
 
     if (result.interrupted) {
+      await saveConversation({
+        userId,
+        threadId,
+        checkpointThreadId: scopedThreadId,
+        agent,
+        pendingApproval: result.interrupts,
+      });
+
       return res.status(202).json({
         success: true,
         data: {
@@ -201,10 +259,23 @@ export const approveEmail = async (req, res) => {
         },
       });
     }
- await deductCredits({
-          userId,
-          credits: 15,
-        });
+    let remainingCredits = Number(req.user.credits ?? 0);
+
+    if (approved) {
+      ({ remainingCredits } = await deductCredits({
+        userId,
+        credits: cost,
+      }));
+    }
+
+    await saveConversation({
+      userId,
+      threadId,
+      checkpointThreadId: scopedThreadId,
+      agent,
+      reply: result.reply,
+    });
+
     return res.status(200).json({
       success: true,
       data: {
@@ -213,6 +284,8 @@ export const approveEmail = async (req, res) => {
         requiresApproval: false,
         reply: result.reply,
         model: result.model,
+        autoApprovals: result.autoApprovals,
+        remainingCredits,
       },
     });
   } catch (error) {

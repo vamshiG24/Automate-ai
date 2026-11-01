@@ -2,6 +2,12 @@ import { randomUUID } from "node:crypto";
 import { HumanMessage } from "@langchain/core/messages";
 import { getChatGraph } from "../services/chatGraph.service.js";
 import { deductCredits } from "../utils/deductCredits.js";
+import {
+  getCreditCost,
+  hasEnoughCredits,
+  insufficientCreditsResponse,
+} from "../utils/credits.js";
+import { saveConversation } from "../utils/conversation.js";
 
 export const chatWithAI = async (req, res) => {
   try {
@@ -35,6 +41,13 @@ export const chatWithAI = async (req, res) => {
       });
     }
 
+    const cost = getCreditCost("chat");
+
+    // Check credits before spending any LLM quota
+    if (!hasEnoughCredits(req.user, cost)) {
+      return insufficientCreditsResponse(res, cost);
+    }
+
     const conversationId = threadId || randomUUID();
 
     // Isolate conversation memory by authenticated user.
@@ -54,18 +67,28 @@ export const chatWithAI = async (req, res) => {
         },
       }
     );
-      
-       await deductCredits({
-      userId:req.user._id,
-      credits: 5,
+
+    const { remainingCredits } = await deductCredits({
+      userId: req.user._id,
+      credits: cost,
     });
+
     const lastMessage = result.messages.at(-1);
+
+    await saveConversation({
+      userId: req.user._id,
+      threadId: conversationId,
+      checkpointThreadId: scopedThreadId,
+      userMessage: message.trim(),
+      reply: lastMessage.content,
+    });
 
     return res.status(200).json({
       success: true,
       data: {
         threadId: conversationId,
         reply: lastMessage.content,
+        remainingCredits,
       },
     });
   } catch (error) {

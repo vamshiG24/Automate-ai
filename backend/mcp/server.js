@@ -9,6 +9,8 @@ import * as z from "zod/v4";
 import mongoose from "mongoose";
 import { google } from "googleapis";
 import jwt from "jsonwebtoken";
+import { lookup } from "node:dns/promises";
+import { BlockList, isIP } from "node:net";
 
 import IntegrationConnection from "../models/integration.model.js";
 import { decrypt } from "../utils/encrypt.js";
@@ -103,6 +105,62 @@ async function getGoogleOAuthClient(userId, requiredService) {
   });
 
   return oauthClient;
+}
+
+// ---------------------------------------------
+// HELPER: BLOCK PRIVATE / INTERNAL URLS (SSRF)
+// ---------------------------------------------
+
+const privateRanges = new BlockList();
+
+for (const [network, prefix] of [
+  ["0.0.0.0", 8],
+  ["10.0.0.0", 8],
+  ["100.64.0.0", 10],
+  ["127.0.0.0", 8],
+  ["169.254.0.0", 16], // cloud metadata endpoints live here
+  ["172.16.0.0", 12],
+  ["192.168.0.0", 16],
+  ["224.0.0.0", 4],
+]) {
+  privateRanges.addSubnet(network, prefix, "ipv4");
+}
+
+for (const [network, prefix] of [
+  ["::", 128],
+  ["::1", 128],
+  ["fc00::", 7],
+  ["fe80::", 10],
+]) {
+  privateRanges.addSubnet(network, prefix, "ipv6");
+}
+
+const isPrivateAddress = (address) => {
+  // IPv4-mapped IPv6, e.g. ::ffff:127.0.0.1
+  const mapped = address.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/i);
+
+  if (mapped) {
+    return privateRanges.check(mapped[1], "ipv4");
+  }
+
+  return privateRanges.check(address, isIP(address) === 6 ? "ipv6" : "ipv4");
+};
+
+async function assertPublicHttpsUrl(rawUrl) {
+  const parsedUrl = new URL(rawUrl);
+
+  if (parsedUrl.protocol !== "https:") {
+    throw new Error("Only HTTPS image URLs are allowed.");
+  }
+
+  const hostname = parsedUrl.hostname.replace(/^\[|\]$/g, "");
+  const addresses = isIP(hostname)
+    ? [{ address: hostname }]
+    : await lookup(hostname, { all: true });
+
+  if (!addresses.length || addresses.some(({ address }) => isPrivateAddress(address))) {
+    throw new Error("Local or internal image URLs are not allowed.");
+  }
 }
 
 // ---------------------------------------------
@@ -930,16 +988,22 @@ Requirements:
 
       await connectDatabase();
 
-      // 2. Find the connected Instagram account.
-    const accessToken = process.env.INSTAGRAM_ACCESS_TOKEN;
-const instagramId = process.env.INSTAGRAM_ACCOUNT_ID;
+      // 2. Find this user's own connected Instagram account.
+      const connection = await IntegrationConnection.findOne({
+        userId,
+        provider: "instagram",
+        services: "instagram",
+        status: "connected",
+      }).select("+tokens.accessToken");
 
-if (!accessToken || !instagramId) {
-  return errorResponse("Instagram credentials are missing.");
-}
+      if (!connection?.tokens?.accessToken) {
+        return errorResponse(
+          "Instagram is not connected. Connect it from the Integrations page first."
+        );
+      }
 
-     
-
+      const accessToken = decrypt(connection.tokens.accessToken);
+      const instagramId = connection.providerAccountId;
 
       // 5. Generate caption if the user did not provide one.
       let finalCaption = caption?.trim();
@@ -1150,28 +1214,8 @@ IMPORTANT:
         throw new Error("GOOGLE_API_KEY is not configured.");
       }
 
-      // 2. Validate image URL
-      const parsedUrl = new URL(imageUrl);
-
-      if (parsedUrl.protocol !== "https:") {
-        throw new Error("Only HTTPS image URLs are allowed.");
-      }
-
-      // Block obvious local/internal hostnames
-      const hostname = parsedUrl.hostname.toLowerCase();
-
-      if (
-        hostname === "localhost" ||
-        hostname.endsWith(".localhost") ||
-        hostname.endsWith(".local") ||
-        hostname === "127.0.0.1" ||
-        hostname === "0.0.0.0" ||
-        hostname === "::1"
-      ) {
-        throw new Error(
-          "Local or internal image URLs are not allowed."
-        );
-      }
+      // 2. Validate image URL (HTTPS only, no private/internal hosts)
+      await assertPublicHttpsUrl(imageUrl);
 
       // 3. Download image
       const imageResponse = await axios.get(imageUrl, {
@@ -1179,7 +1223,7 @@ IMPORTANT:
         timeout: 20000,
         maxContentLength: 10 * 1024 * 1024,
         maxBodyLength: 10 * 1024 * 1024,
-        maxRedirects: 3,
+        maxRedirects: 0,
         validateStatus: (status) =>
           status >= 200 && status < 300,
       });

@@ -42,7 +42,6 @@ export function LoginForm({ className, ...props }) {
 
       // Send token in request body to backend
       const data=await loginApi(firebaseToken);
-console.log(data)
       dispatch(setUser(data.user))
       // Backend login successful; HttpOnly cookie is set
       navigate("/", { replace: true });

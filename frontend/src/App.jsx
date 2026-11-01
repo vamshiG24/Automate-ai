@@ -9,6 +9,7 @@ import CreateAgent from './pages/CreateAgent';
 import Agents from './pages/Agents';
 import Integrations from './pages/Integration';
 import Pricing from './pages/Pricing';
+import Team from './pages/Team';
 
 function App() {
   useFetchMe();
@@ -59,6 +60,12 @@ function App() {
         path="/integrations"
         element={
           user ? <Integrations user={user} /> : <Login />
+        }
+      />
+       <Route
+        path="/team"
+        element={
+          user ? <Team user={user} /> : <Login />
         }
       />
        <Route

@@ -32,6 +32,12 @@ const userSchema = new mongoose.Schema(
   default: 100,
   min: 0,
 },
+
+    // Risk-based approval: let low-risk actions run without a card
+    autoApproveLowRisk: {
+      type: Boolean,
+      default: false,
+    },
   },
   {
     timestamps: true,

@@ -5,10 +5,19 @@ import User from "../models/user.model.js";
 import { app } from "../config/firebase.js";
 
 
-const cookieOptions = {
+const isProduction = process.env.NODE_ENV === "production";
+
+// In production the frontend and API usually live on different domains,
+// which needs SameSite=None + Secure. Locally (http) we use Lax.
+const baseCookieOptions = {
   httpOnly: true,
-  secure: false,
-  sameSite: "strict",
+  secure: isProduction,
+  sameSite: isProduction ? "none" : "lax",
+  path: "/",
+};
+
+const cookieOptions = {
+  ...baseCookieOptions,
   maxAge: 7 * 24 * 60 * 60 * 1000,
 };
 
@@ -73,6 +82,8 @@ export const login = async (req, res) => {
         name: user.name,
         email: user.email,
         profilePicture: user.profilePicture,
+        credits: user.credits,
+        autoApproveLowRisk: Boolean(user.autoApproveLowRisk),
       },
     });
   } catch (error) {
@@ -87,12 +98,8 @@ export const login = async (req, res) => {
 };
 
 export const logOut = async (req, res) => {
-  res.clearCookie("token", {
-    httpOnly: true,
-    secure: true,
-    sameSite: "none",
-    path: "/",
-  });
+  // Must use the same options the cookie was set with, or it won't clear
+  res.clearCookie("token", baseCookieOptions);
 
   return res.status(200).json({
     success: true,
@@ -110,7 +117,8 @@ export const me = async (req, res) => {
         name: req.user.name,
         email: req.user.email,
         profilePicture: req.user.profilePicture,
-        credits:req.user.credits
+        credits:req.user.credits,
+        autoApproveLowRisk: Boolean(req.user.autoApproveLowRisk),
       },
     });
   } catch (error) {
@@ -119,6 +127,34 @@ export const me = async (req, res) => {
     return res.status(500).json({
       success: false,
       message: "Failed to fetch user.",
+    });
+  }
+};
+// PATCH /api/auth/settings  { autoApproveLowRisk }
+export const updateSettings = async (req, res) => {
+  try {
+    const { autoApproveLowRisk } = req.body;
+
+    if (typeof autoApproveLowRisk !== "boolean") {
+      return res.status(400).json({
+        success: false,
+        message: "autoApproveLowRisk must be a boolean.",
+      });
+    }
+
+    req.user.autoApproveLowRisk = autoApproveLowRisk;
+    await req.user.save();
+
+    return res.status(200).json({
+      success: true,
+      settings: { autoApproveLowRisk },
+    });
+  } catch (error) {
+    console.error("Update settings error:", error.message);
+
+    return res.status(500).json({
+      success: false,
+      message: "Failed to update settings.",
     });
   }
 };

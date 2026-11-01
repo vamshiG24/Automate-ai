@@ -16,8 +16,6 @@ export const agentChat = async ({ message, threadId, agentId }) => {
     agentId,
   });
 
-  console.log("Agent chat response:", response.data);
-
   return response.data.data;
 };
 
@@ -28,8 +26,6 @@ export const approveEmailApi = async ({ agentId, threadId, approved }) => {
     threadId,
     approved,
   });
-
-  console.log("Email approval response:", response.data);
 
   return response.data.data;
 };

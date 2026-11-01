@@ -15,10 +15,26 @@ function DropdownMenuPortal({
   return <MenuPrimitive.Portal data-slot="dropdown-menu-portal" {...props} />
 }
 
+// Base UI has no Radix-style `asChild`; it uses `render` instead.
+// Translate it so `<Trigger asChild><Button/></Trigger>` doesn't nest buttons.
+function withAsChild(asChild, children) {
+  return asChild && React.isValidElement(children)
+    ? { render: children }
+    : { children }
+}
+
 function DropdownMenuTrigger({
+  asChild,
+  children,
   ...props
 }) {
-  return <MenuPrimitive.Trigger data-slot="dropdown-menu-trigger" {...props} />
+  return (
+    <MenuPrimitive.Trigger
+      data-slot="dropdown-menu-trigger"
+      {...withAsChild(asChild, children)}
+      {...props}
+    />
+  )
 }
 
 function DropdownMenuContent({
@@ -76,10 +92,13 @@ function DropdownMenuItem({
   className,
   inset,
   variant = "default",
+  asChild,
+  children,
   ...props
 }) {
   return (
     <MenuPrimitive.Item
+      {...withAsChild(asChild, children)}
       data-slot="dropdown-menu-item"
       data-inset={inset}
       data-variant={variant}

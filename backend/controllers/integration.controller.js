@@ -1,16 +1,15 @@
 
 import { google } from "googleapis";
-import jwt from "jsonwebtoken";
 import axios from "axios";
 import IntegrationConnection from "../models/integration.model.js";
 import {
-  googleOAuthClient,
+  createGoogleOAuthClient,
   GOOGLE_SCOPES,
 } from "../config/googleOAuth.js";
 
-import { encrypt } from "../utils/encrypt.js";
+import { encrypt, decrypt } from "../utils/encrypt.js";
+import { signOAuthState, verifyOAuthState } from "../utils/oauthState.js";
 
-// Connect Google account
 // Connect Google account
 export const connectGoogle = async (req, res) => {
   try {
@@ -23,16 +22,9 @@ export const connectGoogle = async (req, res) => {
       });
     }
 
-    const state = jwt.sign(
-      {
-        userId: String(userId),
-        purpose: "google-oauth",
-      },
-      process.env.JWT_SECRET,
-      { expiresIn: "10m" }
-    );
+    const state = signOAuthState(userId, "google-oauth");
 
-    const url = googleOAuthClient.generateAuthUrl({
+    const url = createGoogleOAuthClient().generateAuthUrl({
       access_type: "offline",
       prompt: "consent",
       scope: GOOGLE_SCOPES,
@@ -66,19 +58,17 @@ export const googleCallback = async (req, res) => {
       return res.status(400).send("Invalid OAuth callback");
     }
 
-    const decoded = jwt.verify(state, process.env.JWT_SECRET);
+    const userId = verifyOAuthState(state, "google-oauth");
 
-    if (decoded.purpose !== "google-oauth" || !decoded.userId) {
-      return res.status(400).send("Invalid OAuth state");
-    }
+    // New client per request so concurrent users never share credentials
+    const oauthClient = createGoogleOAuthClient();
+    const { tokens } = await oauthClient.getToken(code);
 
-    const { tokens } = await googleOAuthClient.getToken(code);
-
-    googleOAuthClient.setCredentials(tokens);
+    oauthClient.setCredentials(tokens);
 
     const oauth2 = google.oauth2({
       version: "v2",
-      auth: googleOAuthClient,
+      auth: oauthClient,
     });
 
     const { data: profile } = await oauth2.userinfo.get();
@@ -88,7 +78,7 @@ export const googleCallback = async (req, res) => {
     }
 
     const filter = {
-      userId: decoded.userId,
+      userId,
       provider: "google",
       providerAccountId: profile.id,
     };
@@ -140,13 +130,13 @@ export const googleCallback = async (req, res) => {
     await connection.save();
 
     return res.redirect(
-      `${process.env.FRONTEND_URL}/?google=connected`
+      `${process.env.FRONTEND_URL}/integrations?google=connected`
     );
   } catch (error) {
     console.error("Google OAuth callback:", error.message);
 
-    return res.status(500).send(
-      "Google connection failed. Please try again."
+    return res.redirect(
+      `${process.env.FRONTEND_URL}/integrations?google=error`
     );
   }
 };
@@ -205,19 +195,25 @@ export const getIntegrations = async (req, res) => {
   }
 };
 
-
-const INSTAGRAM_APP_ID = process.env.INSTAGRAM_APP_ID;
-const INSTAGRAM_APP_SECRET = process.env.INSTAGRAM_APP_SECRET;
-const INSTAGRAM_CONFIG_ID = process.env.INSTAGRAM_CONFIG_ID;
-const INSTAGRAM_REDIRECT_URI = process.env.INSTAGRAM_REDIRECT_URI;
-const INSTAGRAM_GRAPH_VERSION = process.env.INSTAGRAM_GRAPH_VERSION || "v23.0";
-
 const INSTAGRAM_SCOPES = [
   "instagram_basic",
   "instagram_content_publish",
   "instagram_manage_comments",
   "instagram_manage_messages",
+  "pages_show_list",
+  "pages_read_engagement",
 ];
+
+// Read lazily so values are always taken after dotenv has loaded
+const getInstagramConfig = () => ({
+  appId: process.env.INSTAGRAM_APP_ID,
+  appSecret: process.env.INSTAGRAM_APP_SECRET,
+  configId: process.env.INSTAGRAM_CONFIG_ID,
+  redirectUri: process.env.INSTAGRAM_REDIRECT_URI,
+  graphUrl: `https://graph.facebook.com/${
+    process.env.INSTAGRAM_GRAPH_VERSION || "v23.0"
+  }`,
+});
 
 // Start Instagram OAuth
 export const connectInstagram = async (req, res) => {
@@ -231,41 +227,29 @@ export const connectInstagram = async (req, res) => {
       });
     }
 
-    if (
-      !INSTAGRAM_APP_ID ||
-      !INSTAGRAM_CONFIG_ID ||
-      !INSTAGRAM_REDIRECT_URI ||
-      !process.env.JWT_SECRET
-    ) {
+    const { appId, appSecret, configId, redirectUri } = getInstagramConfig();
+
+    if (!appId || !appSecret || !configId || !redirectUri) {
       return res.status(500).json({
         success: false,
         message: "Instagram OAuth environment variables are missing",
       });
     }
 
-    const state = jwt.sign(
-      {
-        userId: String(userId),
-        purpose: "instagram-oauth",
-      },
-      process.env.JWT_SECRET,
-      {
-        expiresIn: "10m",
-      }
-    );
+    const state = signOAuthState(userId, "instagram-oauth");
 
-const params = new URLSearchParams({
-  client_id: INSTAGRAM_APP_ID,
-  config_id: INSTAGRAM_CONFIG_ID,
-  display: "popup",
-  override_default_response_type: "true",
-  redirect_uri: INSTAGRAM_REDIRECT_URI,
-  response_type: "code",
-  state,
-  prompt: "login",
-});
+    const params = new URLSearchParams({
+      client_id: appId,
+      config_id: configId,
+      display: "popup",
+      override_default_response_type: "true",
+      redirect_uri: redirectUri,
+      response_type: "code",
+      state,
+      prompt: "login",
+    });
 
-const url = `https://www.facebook.com/dialog/oauth?${params.toString()}`;
+    const url = `https://www.facebook.com/dialog/oauth?${params.toString()}`;
 
     return res.status(200).json({
       success: true,
@@ -293,7 +277,7 @@ export const instagramCallback = async (req, res) => {
       );
 
       return res.redirect(
-        `${process.env.FRONTEND_URL}/?instagram=error`
+        `${process.env.FRONTEND_URL}/integrations?instagram=error`
       );
     }
 
@@ -301,73 +285,98 @@ export const instagramCallback = async (req, res) => {
       return res.status(400).send("Invalid Instagram OAuth callback");
     }
 
-    const decoded = jwt.verify(state, process.env.JWT_SECRET);
+    const userId = verifyOAuthState(state, "instagram-oauth");
+    const { appId, appSecret, redirectUri, graphUrl } = getInstagramConfig();
 
-    if (decoded.purpose !== "instagram-oauth" || !decoded.userId) {
-      return res.status(400).send("Invalid Instagram OAuth state");
+    // 1. Exchange the OAuth code for a short-lived user token
+    const { data: shortLived } = await axios.get(
+      `${graphUrl}/oauth/access_token`,
+      {
+        params: {
+          client_id: appId,
+          client_secret: appSecret,
+          redirect_uri: redirectUri,
+          code,
+        },
+        timeout: 15000,
+      }
+    );
+
+    // 2. Upgrade it to a long-lived user token (~60 days)
+    const { data: longLived } = await axios.get(
+      `${graphUrl}/oauth/access_token`,
+      {
+        params: {
+          grant_type: "fb_exchange_token",
+          client_id: appId,
+          client_secret: appSecret,
+          fb_exchange_token: shortLived.access_token,
+        },
+        timeout: 15000,
+      }
+    );
+
+    // 3. Find the Facebook Page that has this user's Instagram business account
+    const { data: pages } = await axios.get(`${graphUrl}/me/accounts`, {
+      params: {
+        fields: "id,name,access_token,instagram_business_account{id,username}",
+        access_token: longLived.access_token,
+      },
+      timeout: 15000,
+    });
+
+    const page = pages.data?.find((item) => item.instagram_business_account);
+
+    if (!page) {
+      console.error("Instagram OAuth: no Page with a linked Instagram business account");
+
+      return res.redirect(
+        `${process.env.FRONTEND_URL}/integrations?instagram=no_business_account`
+      );
     }
 
-    // Exchange authorization code for a short-lived access token.
-    // Exchange OAuth code for Meta access token
+    const instagramAccount = page.instagram_business_account;
 
- // Verify the fixed Instagram account using its account ID.
-const accountId = process.env.INSTAGRAM_ACCOUNT_ID;
-const accessToken = process.env.INSTAGRAM_ACCESS_TOKEN;
+    const filter = {
+      userId,
+      provider: "instagram",
+      providerAccountId: String(instagramAccount.id),
+    };
 
-if (!accountId || !accessToken) {
-  throw new Error("Instagram account credentials are missing.");
-}
+    let connection = await IntegrationConnection.findOne(filter)
+      .select("+tokens.accessToken");
 
-const profileResponse = await axios.get(
-  `https://graph.facebook.com/${INSTAGRAM_GRAPH_VERSION}/${accountId}`,
-  {
-    params: {
-      fields: "id,username",
-      access_token: accessToken,
-    },
-    timeout: 15000,
-  }
-);
+    if (!connection) {
+      connection = new IntegrationConnection({
+        ...filter,
+        services: [],
+        tokens: {},
+      });
+    }
 
-const profile = profileResponse.data;
+    connection.services = [
+      ...new Set([...(connection.services || []), "instagram"]),
+    ];
 
-const filter = {
-  userId: decoded.userId,
-  provider: "instagram",
-  providerAccountId: String(profile.id),
-};
+    connection.account = {
+      ...connection.account?.toObject?.(),
+      username: instagramAccount.username,
+      displayName: instagramAccount.username,
+    };
 
-let connection = await IntegrationConnection.findOne(filter)
-  .select("+tokens.accessToken");
+    // Page tokens derived from a long-lived user token do not expire
+    connection.tokens.accessToken = encrypt(page.access_token);
+    connection.tokens.expiresAt = null;
 
-if (!connection) {
-  connection = new IntegrationConnection({
-    ...filter,
-    services: [],
-    tokens: {},
-  });
-}
+    connection.metadata = { pageId: page.id, pageName: page.name };
+    connection.scopes = INSTAGRAM_SCOPES;
+    connection.status = "connected";
+    connection.connectedAt = new Date();
 
-connection.services = [
-  ...new Set([...(connection.services || []), "instagram"]),
-];
+    await connection.save();
 
-connection.account = {
-  ...connection.account?.toObject?.(),
-  username: profile.username,
-  displayName: profile.username,
-};
-
-connection.tokens.accessToken = encrypt(accessToken);
-connection.tokens.expiresAt = null;
-
-connection.scopes = INSTAGRAM_SCOPES;
-connection.status = "connected";
-connection.connectedAt = new Date();
-
-await connection.save();
     return res.redirect(
-      `${process.env.FRONTEND_URL}/?instagram=connected`
+      `${process.env.FRONTEND_URL}/integrations?instagram=connected`
     );
   } catch (error) {
     console.error(
@@ -376,7 +385,7 @@ await connection.save();
     );
 
     return res.redirect(
-      `${process.env.FRONTEND_URL}/?instagram=error`
+      `${process.env.FRONTEND_URL}/integrations?instagram=error`
     );
   }
 };
@@ -475,7 +484,7 @@ export const disconnectGoogle = async (req, res) => {
     const connection = await IntegrationConnection.findOne({
       userId,
       provider: "google",
-    });
+    }).select("+tokens.refreshToken");
 
     if (!connection) {
       return res.status(404).json({
@@ -484,8 +493,21 @@ export const disconnectGoogle = async (req, res) => {
       });
     }
 
+    // Revoke access at Google too, not just in our database.
+    // Best effort: a failed revoke should not block the disconnect.
+    if (connection.tokens?.refreshToken) {
+      try {
+        await createGoogleOAuthClient().revokeToken(
+          decrypt(connection.tokens.refreshToken)
+        );
+      } catch (revokeError) {
+        console.warn("Google token revoke failed:", revokeError.message);
+      }
+    }
+
     await IntegrationConnection.deleteOne({
       _id: connection._id,
+      userId,
     });
 
     return res.status(200).json({

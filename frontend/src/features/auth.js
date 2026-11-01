@@ -13,11 +13,15 @@ export const loginApi = async (token) => {
     {token},
     
   );
-console.log(response)
   return response.data;
 };
 
 export const logoutApi = async () => {
   const response = await api.post("/api/auth/logout");
   return response.data;
+};
+// Risk-based approval preference
+export const updateSettingsApi = async (settings) => {
+  const response = await api.patch("/api/auth/settings", settings);
+  return response.data.settings;
 };

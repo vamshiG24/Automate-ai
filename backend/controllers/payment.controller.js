@@ -1,5 +1,5 @@
 
-import razorpay from "../config/razorpay.js";
+import { getRazorpay } from "../config/razorpay.js";
 
 import crypto from "crypto";
 import Payment from "../models/payment.model.js";
@@ -41,7 +41,7 @@ export const createOrder = async (req, res) => {
     }
 
     // Create Razorpay order
-    const order = await razorpay.orders.create({
+    const order = await getRazorpay().orders.create({
       amount: selectedPlan.amount,
       currency: "INR",
       receipt: `receipt-${Date.now()}`,
@@ -99,9 +99,9 @@ export const verify = async (req, res) => {
     } = req.body;
 
     if (
-      !razorpay_order_id ||
-      !razorpay_payment_id ||
-      !razorpay_signature
+      typeof razorpay_order_id !== "string" ||
+      typeof razorpay_payment_id !== "string" ||
+      typeof razorpay_signature !== "string"
     ) {
       return res.status(400).json({
         message: "Payment verification details are required",
@@ -147,7 +147,7 @@ export const verify = async (req, res) => {
     }
 
     // Verify payment status with Razorpay
-    const razorpayPayment = await razorpay.payments.fetch(
+    const razorpayPayment = await getRazorpay().payments.fetch(
       razorpay_payment_id
     );
 
@@ -162,32 +162,51 @@ export const verify = async (req, res) => {
       });
     }
 
-    // Mark payment as paid before adding credits
-    payment.status = "paid";
-    payment.razorpayPaymentId = razorpay_payment_id;
+    // Atomically flip "created" -> "paid". If two verify requests race,
+    // only one of them matches here, so credits are added exactly once.
+    const claimedPayment = await Payment.findOneAndUpdate(
+      {
+        _id: payment._id,
+        status: "created",
+      },
+      {
+        $set: {
+          status: "paid",
+          razorpayPaymentId: razorpay_payment_id,
+        },
+      },
+      {
+        returnDocument: "after",
+      }
+    );
 
-    await payment.save();
+    if (!claimedPayment) {
+      return res.status(200).json({
+        message: "Payment already verified",
+      });
+    }
 
     // Add purchased credits
-   const user = await User.findByIdAndUpdate(
-    userId,
-    {
-      $inc: {
-        credits: payment.credits,
+    const user = await User.findByIdAndUpdate(
+      userId,
+      {
+        $inc: {
+          credits: claimedPayment.credits,
+        },
       },
-    },
-    {
-      new: true,
-    }
-  );
+      {
+        returnDocument: "after",
+      }
+    );
 
-  if (!user) {
-    throw new Error("User not found");
-  }
+    if (!user) {
+      throw new Error("User not found");
+    }
 
     return res.status(200).json({
       message: "Payment verified successfully",
-      creditsAdded: payment.credits,
+      creditsAdded: claimedPayment.credits,
+      remainingCredits: user.credits,
     });
   } catch (error) {
     console.error("Verify payment error:", error);

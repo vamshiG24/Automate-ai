@@ -1,15 +1,25 @@
 import Razorpay from "razorpay";
 
-const keyId = process.env.RAZORPAY_KEY_ID;
-const keySecret = process.env.RAZORPAY_KEY_SECRET;
+let razorpay;
 
-if (!keyId || !keySecret) {
-  throw new Error("Razorpay credentials are missing.");
-}
+// Created on first use so a missing key only breaks payments,
+// not the whole server at startup.
+export const getRazorpay = () => {
+  if (razorpay) {
+    return razorpay;
+  }
 
-const razorpay = new Razorpay({
-  key_id: keyId,
-  key_secret: keySecret,
-});
+  const keyId = process.env.RAZORPAY_KEY_ID;
+  const keySecret = process.env.RAZORPAY_KEY_SECRET;
 
-export default razorpay;
+  if (!keyId || !keySecret) {
+    throw new Error("Razorpay credentials are missing.");
+  }
+
+  razorpay = new Razorpay({
+    key_id: keyId,
+    key_secret: keySecret,
+  });
+
+  return razorpay;
+};

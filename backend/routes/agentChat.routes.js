@@ -8,5 +8,5 @@ const agentChatRouter = express.Router();
 agentChatRouter.use(protect);
 
 agentChatRouter.post("/", chatWithAgent);
-agentChatRouter.post("/approve-email", protect, approveEmail);
+agentChatRouter.post("/approve-email", approveEmail);
 export default agentChatRouter;

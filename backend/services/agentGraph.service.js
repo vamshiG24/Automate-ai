@@ -1,6 +1,7 @@
 import {
   StateGraph,
   MessagesAnnotation,
+  Annotation,
   START,
   END,
   interrupt,
@@ -16,6 +17,52 @@ import jwt from "jsonwebtoken";
 
 import { getCheckpointer } from "../config/langgraph-checkpointer.js";
 import { getMCPTools } from "../mcp/langgraph-mcp.js";
+import {
+  RISKY_TOOLS,
+  assessActionRisk,
+  recordDecision,
+  splitTrustedText,
+} from "./risk.service.js";
+import { CAPABILITY_TOOLS } from "./capabilities.js";
+
+// Graph state = chat messages + the risk assessment of the pending action.
+// The assessment is computed in its own node so it is saved in the
+// checkpoint; when the user approves, the approval node re-runs and reads
+// the SAME assessment instead of recomputing it.
+const AgentState = Annotation.Root({
+  ...MessagesAnnotation.spec,
+
+  riskAssessment: Annotation({
+    reducer: (_, next) => next,
+    default: () => null,
+  }),
+
+  autoApprovals: Annotation({
+    reducer: (current, next) => current.concat(next),
+    default: () => [],
+  }),
+});
+
+const contentToText = (content) =>
+  typeof content === "string"
+    ? content
+    : Array.isArray(content)
+      ? content.map((part) => part?.text || "").join("")
+      : "";
+
+const getMessageType = (message) =>
+  message?._getType?.() || message?.getType?.() || message?.type;
+
+// What the risk engine shows the user (no internal codes)
+const publicRisk = (risk) =>
+  risk
+    ? {
+        score: risk.score,
+        level: risk.level,
+        reasons: risk.reasons,
+        trustSignals: risk.trustSignals,
+      }
+    : null;
 
 const SUPPORTED_MODELS = [
   "openai/gpt-oss-120b",
@@ -28,6 +75,29 @@ const SUPPORTED_MODELS = [
 
 const findTool = (tools, names) =>
   tools.find((tool) => names.includes(tool.name));
+
+// --------------------------------------------------
+// AGENT CAPABILITIES -> TOOL NAMES
+// --------------------------------------------------
+
+const CAPABILITY_TOOL_NAMES = new Set(Object.values(CAPABILITY_TOOLS).flat());
+
+// Only give an agent the tools selected for it. Agents saved without
+// any selection (older agents) keep access to every tool, unless the agent
+// is "strict" (team agents get exactly what the Planner granted, even none).
+const filterToolsForAgent = (tools, capabilities = [], strict = false) => {
+  if (!capabilities.length && !strict) {
+    return tools;
+  }
+
+  const allowed = new Set(
+    capabilities.flatMap((capability) => CAPABILITY_TOOLS[capability] || [])
+  );
+
+  return tools.filter(
+    (tool) => !CAPABILITY_TOOL_NAMES.has(tool.name) || allowed.has(tool.name)
+  );
+};
 
 
 // --------------------------------------------------
@@ -114,6 +184,7 @@ const createAgentGraph = async (agent, userId) => {
   }
 
   const modelName = agent.model || "openai/gpt-oss-120b";
+  const decisionSource = agent.runSource === "team" ? "team" : "chat";
 
   if (!SUPPORTED_MODELS.includes(modelName)) {
     throw new Error("Unsupported Groq model.");
@@ -123,7 +194,9 @@ const createAgentGraph = async (agent, userId) => {
     apiKey: process.env.GROQ_API_KEY,
     model: modelName,
     temperature: agent.temperature ?? 0.7,
-    maxRetries: 2,
+    // Team agents run back to back and can hit Groq's tokens-per-minute
+    // limit; 6 retries with exponential backoff wait out a ~60s window.
+    maxRetries: agent.maxRetries ?? 2,
     timeout: 30000,
   });
 
@@ -630,17 +703,23 @@ Requirements:
   // DEBUG: TOOLS PASSED TO LLM
   // --------------------------------------------------
 
+  const agentTools = filterToolsForAgent(
+    securedTools,
+    agent.tools,
+    agent.strictTools === true
+  );
+
   console.log(
     "Tools passed to LLM:",
-    securedTools.map((tool) => tool.name)
+    agentTools.map((tool) => tool.name)
   );
 
   // --------------------------------------------------
   // BIND TOOLS TO LLM
   // --------------------------------------------------
 
-  const llmWithTools = llm.bindTools(securedTools);
-  const toolNode = new ToolNode(securedTools);
+  const llmWithTools = llm.bindTools(agentTools);
+  const toolNode = new ToolNode(agentTools);
 
   // --------------------------------------------------
   // CURRENT DATE AND TIME
@@ -778,13 +857,13 @@ const chatNode = async (state) => {
     );
  
   const forcePublish =
-    Boolean(publishInstagramImageMcpTool) &&
+    agentTools.some((tool) => tool.name === "publish_instagram_image") &&
     hasImageUrl &&
     isExplicitInstagramPublishRequest(humanText) &&
     !alreadyCalled;
  
   const model = forcePublish
-    ? llm.bindTools(securedTools, {
+    ? llm.bindTools(agentTools, {
         tool_choice: "publish_instagram_image",
       })
     : llmWithTools;
@@ -859,7 +938,7 @@ const routeAfterChat = (state) => {
     approvalToolNames.has(call.name)
   );
 
-  return requiresApproval ? "actionApproval" : "tools";
+  return requiresApproval ? "riskAssess" : "tools";
 };
 
 
@@ -888,6 +967,47 @@ const blockInstagramPublishNode = async (state) => {
   };
 };
   // --------------------------------------------------
+  // RISK ASSESSMENT NODE
+  // --------------------------------------------------
+
+  const riskAssessNode = async (state) => {
+    const messages = state.messages || [];
+    const toolCalls = messages[messages.length - 1]?.tool_calls || [];
+
+    if (toolCalls.length !== 1 || !RISKY_TOOLS.has(toolCalls[0].name)) {
+      return { riskAssessment: null };
+    }
+
+    const lastHumanIndex = messages.findLastIndex(
+      (message) => getMessageType(message) === "human"
+    );
+    const { trusted, untrusted } = splitTrustedText(
+      contentToText(messages[lastHumanIndex]?.content)
+    );
+
+    // Anything tools returned during this turn (emails read, etc.) is untrusted
+    const toolOutput = messages
+      .slice(lastHumanIndex + 1)
+      .filter((message) => getMessageType(message) === "tool")
+      .map((message) => contentToText(message.content))
+      .join("\n");
+
+    const assessment = await assessActionRisk({
+      userId,
+      toolName: toolCalls[0].name,
+      args: toolCalls[0].args || {},
+      // Team agents pass the user's original instruction explicitly, so
+      // text written by the Planner LLM is never treated as the user's
+      userText: agent.trustedUserText ?? trusted,
+      untrustedText: `${untrusted}\n${toolOutput}`,
+    });
+
+    return {
+      riskAssessment: { ...assessment, toolCallId: toolCalls[0].id },
+    };
+  };
+
+  // --------------------------------------------------
   // APPROVAL NODE
   // --------------------------------------------------
 
@@ -895,6 +1015,52 @@ const blockInstagramPublishNode = async (state) => {
     const lastMessage = state.messages[state.messages.length - 1];
 
     const toolCalls = lastMessage?.tool_calls || [];
+
+    const risk =
+      state.riskAssessment?.toolCallId === toolCalls[0]?.id
+        ? state.riskAssessment
+        : null;
+
+    // Auto-approve low-risk actions (if enabled), otherwise pause the graph
+    // and show the approval card with the risk score and reasons.
+    const decide = async (payload) => {
+      const toolName = toolCalls[0].name;
+
+      if (risk?.autoApprove) {
+        await recordDecision({
+          userId,
+          toolName,
+          assessment: risk,
+          approved: true,
+          autoApproved: true,
+          source: decisionSource,
+        });
+
+        return {
+          approved: true,
+          autoApproval: {
+            toolName,
+            target: risk.target,
+            score: risk.score,
+            level: risk.level,
+            trustSignals: risk.trustSignals,
+            at: Date.now(),
+          },
+        };
+      }
+
+      const decision = interrupt({ ...payload, risk: publicRisk(risk) });
+
+      await recordDecision({
+        userId,
+        toolName,
+        assessment: risk,
+        approved: decision?.approved === true,
+        source: decisionSource,
+      });
+
+      return decision;
+    };
 
     // Only one approval-protected action at a time.
     if (
@@ -947,7 +1113,7 @@ const blockInstagramPublishNode = async (state) => {
         };
       }
 
-      const decision = interrupt({
+      const decision = await decide({
         type: "email_approval",
         toolCallId: actionCall.id,
         email: {
@@ -974,7 +1140,9 @@ const blockInstagramPublishNode = async (state) => {
       }
 
       // Continue to ToolNode only after approval.
-      return {};
+      return decision.autoApproval
+        ? { autoApprovals: [decision.autoApproval] }
+        : {};
     }
 
     // ----------------------------------------------
@@ -1136,7 +1304,7 @@ Generate an Instagram caption.
   // STEP 3: SHOW ONE APPROVAL CARD
   // ----------------------------------------------
 
-  const decision = interrupt({
+  const decision = await decide({
     type: "instagram_publish_approval",
     toolCallId: actionCall.id,
 
@@ -1251,7 +1419,7 @@ Generate an Instagram caption.
       };
     }
 
-    const decision = interrupt({
+    const decision = await decide({
       type: "calendar_approval",
       toolCallId: actionCall.id,
 
@@ -1284,7 +1452,9 @@ Generate an Instagram caption.
     }
 
     // Continue to ToolNode only after approval.
-    return {};
+    return decision.autoApproval
+      ? { autoApprovals: [decision.autoApproval] }
+      : {};
   };
 
   // --------------------------------------------------
@@ -1307,13 +1477,15 @@ Generate an Instagram caption.
   // BUILD GRAPH
   // --------------------------------------------------
 
-  const workflow = new StateGraph(MessagesAnnotation)
+  const workflow = new StateGraph(AgentState)
     .addNode("chat", chatNode)
+    .addNode("riskAssess", riskAssessNode)
     .addNode("actionApproval", actionApprovalNode)
     .addNode("tools", toolNode)
      .addNode("blockInstagramPublish", blockInstagramPublishNode)
     .addEdge(START, "chat")
     .addConditionalEdges("chat", routeAfterChat)
+    .addEdge("riskAssess", "actionApproval")
     .addConditionalEdges("actionApproval", routeAfterApproval)
     .addEdge("tools", "chat")
     .addEdge("blockInstagramPublish", "chat");
@@ -1348,7 +1520,7 @@ Generate an Instagram caption.
 // FORMAT RESULTS
 // --------------------------------------------------
 
-const formatResult = (result, modelName) => {
+const formatResult = (result, modelName, startedAt = 0) => {
   const lastMessage = result.messages?.[result.messages.length - 1];
 
   return {
@@ -1366,6 +1538,10 @@ const formatResult = (result, modelName) => {
       id: item.id,
       value: item.value,
     })),
+
+    autoApprovals: (result.autoApprovals || []).filter(
+      (item) => item.at >= startedAt
+    ),
   };
 };
 
@@ -1392,6 +1568,7 @@ export const runAgentGraph = async ({
   }
 
   const { graph, modelName } = await createAgentGraph(agent, userId);
+  const startedAt = Date.now();
 
   const result = await graph.invoke(
     {
@@ -1411,7 +1588,31 @@ export const runAgentGraph = async ({
     }
   );
 
-  return formatResult(result, modelName);
+  return formatResult(result, modelName, startedAt);
+};
+
+// --------------------------------------------------
+// CONTINUE AFTER AN ERROR
+// --------------------------------------------------
+// Invoking with null input re-runs whatever node failed, starting from the
+// last saved checkpoint. Used to retry after a provider rate limit without
+// adding the user's message twice or repeating an approved action.
+
+export const continueAgentGraph = async ({ agent, threadId, userId, since }) => {
+  const { graph, modelName } = await createAgentGraph(agent, userId);
+  // `since` = when the original call started, so auto-approvals made before
+  // the rate limit hit are still reported
+  const startedAt = since ?? Date.now();
+
+  const result = await graph.invoke(null, {
+    configurable: {
+      thread_id: threadId,
+    },
+
+    recursionLimit: 15,
+  });
+
+  return formatResult(result, modelName, startedAt);
 };
 
 // --------------------------------------------------
@@ -1437,6 +1638,7 @@ export const resumeAgentGraph = async ({
   }
 
   const { graph, modelName } = await createAgentGraph(agent, userId);
+  const startedAt = Date.now();
 
   const result = await graph.invoke(
     new Command({
@@ -1453,5 +1655,5 @@ export const resumeAgentGraph = async ({
     }
   );
 
-  return formatResult(result, modelName);
+  return formatResult(result, modelName, startedAt);
 };

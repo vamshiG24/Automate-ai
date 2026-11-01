@@ -81,7 +81,15 @@ export default function Integrations() {
       setSuccess("Google account connected successfully.");
     } else if (instagramStatus === "connected") {
       setSuccess("Instagram account connected successfully.");
-    } else if (oauthError) {
+    } else if (instagramStatus === "no_business_account") {
+      setError(
+        "No Instagram business account found. Link your Instagram professional account to a Facebook Page and try again."
+      );
+    } else if (
+      oauthError ||
+      googleStatus === "error" ||
+      instagramStatus === "error"
+    ) {
       setError("Account connection failed. Please try again.");
     }
 
