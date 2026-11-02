@@ -1,8 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Link } from "react-router-dom";
 import {
-  Bot, Coins, Ellipsis, MessageSquare, PanelLeftClose, Pencil, Pin,
-  PinOff, Search, SquarePen, Trash2, Users, Workflow, X,
+  Bot, Ellipsis, MessageSquare, PanelLeftClose, Pencil, Pin,
+  PinOff, Search, SquarePen, Trash2, X,
 } from "lucide-react";
 
 import {
@@ -13,8 +12,8 @@ import {
 const hideScrollbar =
   "[-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden";
 const menuContent =
-  "rounded-2xl border border-white/10 bg-[#1d2026]/95 p-1.5 text-zinc-100 shadow-2xl shadow-black/50 backdrop-blur-xl";
-const menuItem = "cursor-pointer gap-2.5 rounded-xl py-2 text-zinc-300 focus:bg-white/10 focus:text-white";
+  "rounded-2xl border border-slate-200 bg-white p-1.5 text-slate-800 shadow-xl shadow-slate-900/10";
+const menuItem = "cursor-pointer gap-2.5 rounded-xl py-2 text-slate-700 focus:bg-slate-100 focus:text-slate-900";
 
 const DAY = 24 * 60 * 60 * 1000;
 
@@ -75,14 +74,14 @@ function ConversationItem({ conversation, active, disabled, onSelect, onRename, 
           if (event.key === "Enter") saveTitle();
           if (event.key === "Escape") { setTitle(conversation.title); setEditing(false); }
         }}
-        className="w-full rounded-xl border border-white/20 bg-white/[0.06] px-3 py-2 text-sm text-white outline-none"
+        className="w-full rounded-xl border border-indigo-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none ring-2 ring-indigo-500/15"
         aria-label="Conversation title"
       />
     );
   }
 
   return (
-    <div className={`group relative flex items-center rounded-xl transition-colors ${active ? "bg-white/[0.09]" : "hover:bg-white/[0.05]"}`}>
+    <div className={`group relative flex items-center rounded-xl transition-colors ${active ? "bg-indigo-50" : "hover:bg-slate-50"}`}>
       <button
         type="button"
         disabled={disabled}
@@ -91,21 +90,21 @@ function ConversationItem({ conversation, active, disabled, onSelect, onRename, 
         className="flex min-w-0 flex-1 items-center gap-2.5 px-3 py-2 text-left disabled:cursor-not-allowed"
       >
         {conversation.agentId
-          ? <Bot size={14} className="shrink-0 text-violet-300/80" />
-          : <MessageSquare size={14} className="shrink-0 text-zinc-500" />}
+          ? <Bot size={15} className="shrink-0 text-violet-500" />
+          : <MessageSquare size={15} className="shrink-0 text-slate-400" />}
         <span className="min-w-0 flex-1">
-          <span className={`block truncate text-[13px] ${active ? "text-white" : "text-zinc-300"}`}>{conversation.title}</span>
-          {conversation.agentName && <span className="block truncate text-[11px] text-zinc-500">{conversation.agentName}</span>}
+          <span className={`block truncate text-[13px] ${active ? "font-medium text-slate-900" : "text-slate-700"}`}>{conversation.title}</span>
+          {conversation.agentName && <span className="block truncate text-[11px] text-slate-400">{conversation.agentName}</span>}
         </span>
         {conversation.hasPendingApproval && (
-          <span className="size-2 shrink-0 rounded-full bg-amber-400" title="Waiting for your approval" />
+          <span className="size-2 shrink-0 rounded-full bg-amber-500" title="Waiting for your approval" />
         )}
       </button>
 
       <DropdownMenu>
         <DropdownMenuTrigger
           aria-label="Conversation options"
-          className={`mr-1 grid size-7 shrink-0 place-items-center rounded-lg text-zinc-400 outline-none hover:bg-white/10 hover:text-white focus-visible:opacity-100 data-[popup-open]:opacity-100 ${active ? "opacity-100" : "opacity-100 md:opacity-0 md:group-hover:opacity-100"}`}
+          className={`mr-1 grid size-7 shrink-0 place-items-center rounded-lg text-slate-400 outline-none hover:bg-slate-200/70 hover:text-slate-700 focus-visible:opacity-100 data-[popup-open]:opacity-100 ${active ? "opacity-100" : "opacity-100 md:opacity-0 md:group-hover:opacity-100"}`}
         >
           <Ellipsis size={15} />
         </DropdownMenuTrigger>
@@ -117,10 +116,10 @@ function ConversationItem({ conversation, active, disabled, onSelect, onRename, 
             {conversation.pinned ? <PinOff size={14} /> : <Pin size={14} />}
             {conversation.pinned ? "Unpin" : "Pin"}
           </DropdownMenuItem>
-          <DropdownMenuSeparator className="bg-white/10" />
+          <DropdownMenuSeparator className="bg-slate-100" />
           <DropdownMenuItem
             onClick={() => onDelete(conversation)}
-            className="cursor-pointer gap-2.5 rounded-xl py-2 text-red-400 focus:bg-red-500/10 focus:text-red-400"
+            className="cursor-pointer gap-2.5 rounded-xl py-2 text-red-600 focus:bg-red-50 focus:text-red-600"
           >
             <Trash2 size={14} />Delete
           </DropdownMenuItem>
@@ -144,26 +143,22 @@ export default function ChatSidebar({
   onTogglePin,
   onDelete,
   onClose,
-  user,
 }) {
   const groups = useMemo(() => groupConversations(conversations), [conversations]);
 
   return (
-    <div className="flex h-full w-full flex-col border-r border-white/10 bg-[#121317]/95 backdrop-blur-xl md:bg-black/20">
-      <div className="flex h-16 shrink-0 items-center justify-between px-4">
-        <Link to="/" className="flex items-center gap-2.5">
-          <span className="grid size-8 place-items-center rounded-lg bg-white text-zinc-900"><Workflow size={17} /></span>
-          <span className="text-sm font-medium tracking-tight">AutoMate AI</span>
-        </Link>
+    <div className="flex h-full w-full flex-col border-r border-slate-200/80 bg-white">
+      <div className="flex h-14 shrink-0 items-center justify-between px-4">
+        <h2 className="text-sm font-semibold text-slate-900">Chat history</h2>
         <button
           type="button"
           onClick={onClose}
-          aria-label="Close sidebar"
-          title="Close sidebar"
-          className="grid size-8 place-items-center rounded-lg text-zinc-400 hover:bg-white/10 hover:text-white"
+          aria-label="Close chat history"
+          title="Close chat history"
+          className="grid size-8 place-items-center rounded-lg text-slate-400 hover:bg-slate-100 hover:text-slate-700"
         >
-          <PanelLeftClose size={17} className="hidden md:block" />
-          <X size={17} className="md:hidden" />
+          <PanelLeftClose size={17} className="hidden xl:block" />
+          <X size={17} className="xl:hidden" />
         </button>
       </div>
 
@@ -172,26 +167,20 @@ export default function ChatSidebar({
           type="button"
           onClick={onNewChat}
           disabled={disabled}
-          className="flex w-full items-center gap-2.5 rounded-xl border border-white/10 bg-white/[0.05] px-3 py-2.5 text-sm text-zinc-200 transition-colors hover:bg-white/10 hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
+          className="flex w-full items-center justify-center gap-2 rounded-xl bg-indigo-600 px-3 py-2.5 text-sm font-medium text-white shadow-sm transition hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-50"
         >
           <SquarePen size={16} />New chat
         </button>
-        <Link
-          to="/team"
-          className="flex w-full items-center gap-2.5 rounded-xl px-3 py-2 text-sm text-zinc-300 transition-colors hover:bg-white/[0.06] hover:text-white"
-        >
-          <Users size={16} className="text-violet-300" />Agent teams
-        </Link>
-        <label className="flex items-center gap-2 rounded-xl border border-white/[0.06] bg-black/20 px-3 py-2 focus-within:border-white/20">
-          <Search size={14} className="shrink-0 text-zinc-500" />
+        <label className="flex items-center gap-2 rounded-xl border border-slate-200 bg-slate-50/70 px-3 py-2 focus-within:border-indigo-300 focus-within:bg-white focus-within:ring-2 focus-within:ring-indigo-500/15">
+          <Search size={14} className="shrink-0 text-slate-400" />
           <input
             value={search}
             onChange={(event) => onSearchChange(event.target.value)}
             placeholder="Search chats"
-            className="w-full bg-transparent text-[13px] text-white outline-none placeholder:text-zinc-500"
+            className="w-full bg-transparent text-[13px] text-slate-900 outline-none placeholder:text-slate-400"
           />
           {search && (
-            <button type="button" onClick={() => onSearchChange("")} aria-label="Clear search" className="text-zinc-500 hover:text-white"><X size={13} /></button>
+            <button type="button" onClick={() => onSearchChange("")} aria-label="Clear search" className="text-slate-400 hover:text-slate-700"><X size={13} /></button>
           )}
         </label>
       </div>
@@ -200,22 +189,22 @@ export default function ChatSidebar({
         {loading && !conversations.length && (
           <div className="space-y-2 px-1 pt-1">
             {Array.from({ length: 6 }, (_, index) => (
-              <div key={index} className="h-9 animate-pulse rounded-xl bg-white/[0.04]" />
+              <div key={index} className="h-9 animate-pulse rounded-xl bg-slate-100" />
             ))}
           </div>
         )}
 
-        {error && <p className="px-3 py-2 text-xs text-red-300">{error}</p>}
+        {error && <p className="px-3 py-2 text-xs text-red-600">{error}</p>}
 
         {!loading && !error && !conversations.length && (
-          <p className="px-3 py-6 text-center text-xs leading-5 text-zinc-500">
+          <p className="px-3 py-6 text-center text-xs leading-5 text-slate-500">
             {search ? "No chats match your search." : "Your conversations will appear here."}
           </p>
         )}
 
         {groups.map((group) => (
           <div key={group.label} className="mb-3">
-            <p className="px-3 pb-1 pt-2 text-[11px] font-medium uppercase tracking-wider text-zinc-500">{group.label}</p>
+            <p className="px-3 pb-1 pt-2 text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-400">{group.label}</p>
             <div className="space-y-0.5">
               {group.items.map((conversation) => (
                 <ConversationItem
@@ -233,23 +222,6 @@ export default function ChatSidebar({
           </div>
         ))}
       </nav>
-
-      <Link
-        to="/pricing"
-        className="m-3 flex shrink-0 items-center gap-3 rounded-xl border border-white/[0.06] bg-white/[0.03] px-3 py-2.5 transition-colors hover:bg-white/[0.07]"
-      >
-        <span className="grid size-8 shrink-0 place-items-center overflow-hidden rounded-lg bg-white/10">
-          {user?.profilePicture
-            ? <img src={user.profilePicture} alt="" referrerPolicy="no-referrer" className="size-full object-cover" />
-            : <Coins size={15} className="text-violet-300" />}
-        </span>
-        <span className="min-w-0 flex-1">
-          <span className="block truncate text-[13px] text-zinc-200">{user?.name || "User"}</span>
-          <span className="block text-[11px] text-zinc-500">
-            {Number(user?.credits ?? 0).toLocaleString("en-IN")} credits
-          </span>
-        </span>
-      </Link>
     </div>
   );
 }

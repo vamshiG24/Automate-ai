@@ -3,13 +3,6 @@ import { cn } from "@/lib/utils";
 import { FcGoogle } from "react-icons/fc";
 import { Button } from "@/components/ui/button";
 import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
-import {
   Field,
   FieldDescription,
   FieldGroup,
@@ -19,6 +12,7 @@ import { auth, googleProvider } from "../firebase";
 import { useNavigate } from "react-router-dom";
 import { loginApi } from "@/features/auth";
 import { useState } from "react";
+import { CircleAlert, Loader2 } from "lucide-react";
 import { useDispatch } from "react-redux";
 import { setUser } from "@/redux/userSlice";
 
@@ -59,56 +53,65 @@ export function LoginForm({ className, ...props }) {
   };
   return (
     <div className={cn("flex flex-col gap-6", className)} {...props}>
-      <Card className="border-0 bg-transparent shadow-none">
-        <CardHeader className="space-y-3 text-center">
-          <CardTitle className="text-2xl font-semibold tracking-tight text-white">
-            Welcome to Automate AI
-          </CardTitle>
+      <div className="space-y-2 text-center">
+        <h2 className="text-2xl font-semibold tracking-tight text-slate-900">
+          Welcome to AutoMate AI
+        </h2>
+        <p className="text-sm text-slate-500">
+          Sign in to build and manage your AI agents.
+        </p>
+      </div>
 
-          <CardDescription className="text-sm text-zinc-400">
-            Sign in to build and manage your AI agents.
-          </CardDescription>
-        </CardHeader>
+      <form>
+        <FieldGroup>
+          {error && (
+            <div
+              role="alert"
+              className="flex items-start gap-2.5 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700"
+            >
+              <CircleAlert className="mt-0.5 size-4 shrink-0" />
+              <p className="min-w-0 break-words">{error}</p>
+            </div>
+          )}
 
-        <CardContent className="pt-4">
-          <form>
-            <FieldGroup>
-              <Field>
-                <Button
-                onClick={handleGoogleLogin}
-                  variant="outline"
-                  type="button"
-                  className="h-12 w-full gap-3 rounded-xl border-white/15 bg-white/[0.04] text-sm font-medium text-white transition hover:border-violet-400/50 hover:bg-white/[0.08] hover:text-white"
-                >
-                <FcGoogle/>
+          <Field>
+            <Button
+              onClick={handleGoogleLogin}
+              disabled={loading}
+              variant="outline"
+              type="button"
+              className="h-12 w-full gap-3 rounded-xl border border-slate-200 bg-white text-sm font-medium text-slate-700 shadow-sm transition hover:border-slate-300 hover:bg-slate-50 hover:text-slate-900"
+            >
+              {loading ? (
+                <Loader2 className="size-5 animate-spin text-slate-400" />
+              ) : (
+                <FcGoogle className="size-5" />
+              )}
+              {loading ? "Signing in..." : "Continue with Google"}
+            </Button>
+          </Field>
 
-                  Continue with Google
-                </Button>
-              </Field>
-
-              <Field>
-                <FieldDescription className="pt-3 text-center text-xs leading-6 text-zinc-500">
-                  By continuing, you agree to our{" "}
-                  <a
-                    href="/terms"
-                    className="text-zinc-300 underline underline-offset-4 transition hover:text-white"
-                  >
-                    Terms of Service
-                  </a>{" "}
-                  and{" "}
-                  <a
-                    href="/privacy"
-                    className="text-zinc-300 underline underline-offset-4 transition hover:text-white"
-                  >
-                    Privacy Policy
-                  </a>
-                  .
-                </FieldDescription>
-              </Field>
-            </FieldGroup>
-          </form>
-        </CardContent>
-      </Card>
+          <Field>
+            <FieldDescription className="text-center text-xs leading-6 text-slate-500">
+              By continuing, you agree to our{" "}
+              <a
+                href="/terms"
+                className="font-medium text-slate-700 underline underline-offset-4 transition hover:text-indigo-600"
+              >
+                Terms of Service
+              </a>{" "}
+              and{" "}
+              <a
+                href="/privacy"
+                className="font-medium text-slate-700 underline underline-offset-4 transition hover:text-indigo-600"
+              >
+                Privacy Policy
+              </a>
+              .
+            </FieldDescription>
+          </Field>
+        </FieldGroup>
+      </form>
     </div>
   );
 }

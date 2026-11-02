@@ -12,6 +12,8 @@ Users create their own **custom agents** (name, instructions, model, temperature
 | --- | --- |
 | **Agent Teams (new)** | One instruction → a Planner builds a team of specialist agents, each with **only the permissions its step needs**. Earlier agents' results are passed on as untrusted data |
 | **Risk-based approval (new)** | Every real action gets a 0-100 risk score with plain-English reasons. Learns from your past approve/reject decisions. Low-risk actions can be auto-approved; prompt-injection attempts are always flagged high |
+| **Live agent office (UI)** | The AI Team page shows an animated isometric office drawn in SVG. Every agent sits at its own desk; you can see it typing, raising a hand for approval or finishing its task, with live status bubbles |
+| **Activity dashboard** | Timeline of approvals, team runs and chats, plus safety stats and a risk-level breakdown |
 | Custom agents | Create agents with their own instructions, Groq model, temperature and an allow-list of tools |
 | Tool calling via MCP | A Model Context Protocol server exposes Gmail, Calendar, Instagram and Gemini Vision tools to the LangGraph agent |
 | Human-in-the-loop | Sending email, creating events and publishing posts pause the graph (`interrupt`) until the user approves or rejects |
@@ -170,8 +172,9 @@ backend/
   tests/         Unit tests (node --test)
   utils/         Encryption, credits, OAuth state, conversation history
 frontend/
-  src/pages/       Home (chat), Team, Agents, CreateAgent, Integrations, Pricing, Login
-  src/components/  ChatSidebar, ApprovalCard (with risk panel) + UI kit
+  src/pages/       Home (chat), Team, Activity, Agents, CreateAgent, Integrations, Pricing, Login
+  src/components/  AppShell (sidebar layout), ChatSidebar, ApprovalCard (with risk panel), UI kit
+  src/components/office/  OfficeScene (isometric SVG office), LiveOffice (status bubbles), layout + status helpers
   src/features/    API helpers
 ```
 

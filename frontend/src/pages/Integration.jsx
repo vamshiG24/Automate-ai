@@ -5,19 +5,23 @@ import {
   Check,
   ArrowUpRight,
   Unplug,
+  Loader2,
+  ShieldCheck,
+  CircleAlert,
+  CircleCheck,
 } from "lucide-react";
 import { FaInstagram } from "react-icons/fa";
 
 import { Button } from "@/components/ui/button";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardTitle,
-} from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
-import { Separator } from "@/components/ui/separator";
+import AppShell from "@/components/AppShell";
 import api from "@/api";
+
+// Soft colour tile per integration (presentation only)
+const tileStyles = {
+  gmail: "bg-red-50 text-red-600",
+  googleCalendar: "bg-sky-50 text-sky-600",
+  instagram: "bg-pink-50 text-pink-600",
+};
 
 const integrationList = [
   {
@@ -43,18 +47,38 @@ const integrationList = [
   },
 ];
 
+// Result of an OAuth redirect (?google=connected, ?instagram=error, ...)
+function readOAuthResult() {
+  const params = new URLSearchParams(window.location.search);
+  const googleStatus = params.get("google");
+  const instagramStatus = params.get("instagram");
+  const oauthError = params.get("error");
+
+  if (googleStatus === "connected") return { success: "Google account connected successfully.", error: "" };
+  if (instagramStatus === "connected") return { success: "Instagram account connected successfully.", error: "" };
+  if (instagramStatus === "no_business_account") {
+    return {
+      success: "",
+      error: "No Instagram business account found. Link your Instagram professional account to a Facebook Page and try again.",
+    };
+  }
+  if (oauthError || googleStatus === "error" || instagramStatus === "error") {
+    return { success: "", error: "Account connection failed. Please try again." };
+  }
+  return { success: "", error: "" };
+}
+
 export default function Integrations() {
+  const [oauthResult] = useState(readOAuthResult);
   const [integrations, setIntegrations] = useState({});
   const [loading, setLoading] = useState(true);
   const [connecting, setConnecting] = useState(null);
   const [disconnecting, setDisconnecting] = useState(null);
-  const [error, setError] = useState("");
-  const [success, setSuccess] = useState("");
+  const [error, setError] = useState(oauthResult.error);
+  const [success, setSuccess] = useState(oauthResult.success);
 
   const fetchIntegrations = useCallback(async () => {
     try {
-      setError("");
-
       const { data } = await api.get("/api/integrations");
 
       setIntegrations(data.integrations || {});
@@ -71,34 +95,21 @@ export default function Integrations() {
   }, []);
 
   useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-
-    const googleStatus = params.get("google");
-    const instagramStatus = params.get("instagram");
-    const oauthError = params.get("error");
-
-    if (googleStatus === "connected") {
-      setSuccess("Google account connected successfully.");
-    } else if (instagramStatus === "connected") {
-      setSuccess("Instagram account connected successfully.");
-    } else if (instagramStatus === "no_business_account") {
-      setError(
-        "No Instagram business account found. Link your Instagram professional account to a Facebook Page and try again."
-      );
-    } else if (
-      oauthError ||
-      googleStatus === "error" ||
-      instagramStatus === "error"
-    ) {
-      setError("Account connection failed. Please try again.");
-    }
-
-    if (googleStatus || instagramStatus || oauthError) {
+    // Remove the OAuth result from the URL so a refresh doesn't repeat it
+    if (window.location.search) {
       window.history.replaceState({}, "", window.location.pathname);
     }
 
-    fetchIntegrations();
-  }, [fetchIntegrations]);
+    let active = true;
+    api.get("/api/integrations")
+      .then(({ data }) => active && setIntegrations(data.integrations || {}))
+      .catch((err) => {
+        console.error("Failed to fetch integrations:", err);
+        if (active) setError(err.response?.data?.message || "Failed to load integrations. Please try again.");
+      })
+      .finally(() => active && setLoading(false));
+    return () => { active = false; };
+  }, []);
 
   const handleConnect = async (id) => {
     try {
@@ -182,42 +193,45 @@ export default function Integrations() {
   };
 
   return (
-    <div className="relative min-h-screen bg-[radial-gradient(ellipse_80%_50%_at_50%_0%,#2b2f3a_0%,#191b21_55%,#121317_100%)] px-4 py-10 text-white sm:px-8">
-      <div
-        aria-hidden
-        className="pointer-events-none fixed inset-0 bg-[radial-gradient(ellipse_at_center,transparent_40%,rgba(0,0,0,0.35)_100%)]"
-      />
-
-      <div className="relative z-10 mx-auto max-w-3xl space-y-8">
-        <div className="space-y-2">
-          <p className="text-xs font-medium uppercase tracking-[0.18em] text-violet-300/80">
-            SETTINGS / INTEGRATIONS
-          </p>
-
-          <h1 className="text-3xl font-semibold tracking-tight">
-            Integrations
-          </h1>
-
-          <p className="text-sm text-zinc-500">
-            Connect your accounts and let AutoMate AI handle tasks for you.
+    <AppShell
+      title="Integrations"
+      subtitle="Connect your accounts and let AutoMate AI handle tasks for you."
+    >
+      <div className="mx-auto w-full max-w-6xl px-4 py-6 sm:px-8 sm:py-8">
+        <div className="space-y-1">
+          <h2 className="text-lg font-semibold tracking-tight text-slate-900">
+            Connected apps
+          </h2>
+          <p className="text-sm text-slate-500">
+            Your agents can only use the accounts you connect here.
           </p>
         </div>
 
-        <Separator className="bg-white/10" />
+        {(error || success) && (
+          <div className="mt-5 space-y-3">
+            {error && (
+              <div
+                role="alert"
+                className="flex items-start gap-2.5 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700"
+              >
+                <CircleAlert className="mt-0.5 size-4 shrink-0" />
+                <p>{error}</p>
+              </div>
+            )}
 
-        {error && (
-          <div className="rounded-xl border border-red-500/20 bg-red-500/[0.08] p-4">
-            <p className="text-sm text-red-300">{error}</p>
+            {success && (
+              <div
+                role="status"
+                className="flex items-start gap-2.5 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700"
+              >
+                <CircleCheck className="mt-0.5 size-4 shrink-0" />
+                <p>{success}</p>
+              </div>
+            )}
           </div>
         )}
 
-        {success && (
-          <div className="rounded-xl border border-emerald-500/20 bg-emerald-500/[0.08] p-4">
-            <p className="text-sm text-emerald-300">{success}</p>
-          </div>
-        )}
-
-        <div className="space-y-4">
+        <div className="mt-5 grid gap-4 md:grid-cols-2 xl:grid-cols-3">
           {integrationList.map((item) => {
             const integration = integrations[item.id];
             const connected = Boolean(integration?.connected);
@@ -232,93 +246,101 @@ export default function Integrations() {
                   (entry) => entry.id === disconnecting
                 )?.provider === "google");
 
+            const accountLabel = connected
+              ? integration.email ||
+                integration.username ||
+                integration.displayName ||
+                ""
+              : "";
+
             return (
-              <Card
+              <div
                 key={item.id}
-                className="rounded-2xl border border-white/10 bg-white/[0.04] text-white shadow-[0_20px_60px_rgba(0,0,0,0.35),inset_0_1px_0_rgba(255,255,255,0.06)] backdrop-blur-xl transition hover:border-white/25 hover:bg-white/[0.06]"
+                className="flex flex-col rounded-2xl border border-slate-200/80 bg-white p-5 shadow-sm transition hover:border-slate-300 hover:shadow-md"
               >
-                <CardContent className="flex flex-col gap-5 p-5 sm:flex-row sm:items-center sm:justify-between">
-                  <div className="flex items-start gap-4">
-                    <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-white text-zinc-900 shadow-[0_8px_24px_rgba(255,255,255,0.1)]">
-                      <Icon className="h-5 w-5" />
-                    </div>
+                <div className="flex items-start justify-between gap-3">
+                  <div
+                    className={`grid size-10 shrink-0 place-items-center rounded-xl ${tileStyles[item.id] || "bg-indigo-50 text-indigo-600"}`}
+                  >
+                    <Icon className="size-5" />
+                  </div>
 
-                    <div className="space-y-1.5">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <h2 className="font-medium text-white">
-                          {item.name}
-                        </h2>
+                  {loading ? (
+                    <span className="h-5 w-20 animate-pulse rounded-full bg-slate-100" />
+                  ) : connected ? (
+                    <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2.5 py-0.5 text-xs font-medium text-emerald-700 ring-1 ring-emerald-600/15">
+                      <Check className="size-3" />
+                      Connected
+                    </span>
+                  ) : (
+                    <span className="inline-flex items-center rounded-full bg-slate-50 px-2.5 py-0.5 text-xs font-medium text-slate-600 ring-1 ring-slate-500/15">
+                      Not connected
+                    </span>
+                  )}
+                </div>
 
-                        {!loading && connected && (
-                          <Badge
-                            variant="secondary"
-                            className="gap-1 border border-emerald-400/20 bg-emerald-400/10 font-normal text-emerald-300"
-                          >
-                            <Check className="h-3 w-3" />
-                            Connected
-                          </Badge>
-                        )}
-                      </div>
+                <h3 className="mt-4 font-semibold text-slate-900">
+                  {item.name}
+                </h3>
+                <p className="mt-1 text-sm leading-relaxed text-slate-600">
+                  {item.description}
+                </p>
 
-                      <CardTitle className="sr-only">
-                        {item.name}
-                      </CardTitle>
+                {accountLabel && (
+                  <p className="mt-2 truncate text-xs text-slate-500" title={accountLabel}>
+                    {accountLabel}
+                  </p>
+                )}
 
-                      <CardDescription className="max-w-md leading-relaxed text-zinc-500">
-                        {item.description}
-                      </CardDescription>
-
-                      {connected && (
-                        <p className="pt-1 text-xs text-zinc-500">
-                          {integration.email ||
-                            integration.username ||
-                            integration.displayName ||
-                            ""}
-                        </p>
+                <div className="mt-auto flex pt-5">
+                  {connected ? (
+                    <Button
+                      variant="outline"
+                      disabled={loading || isDisconnecting}
+                      onClick={() => handleDisconnect(item.id)}
+                      className="h-10 w-full rounded-xl border border-slate-200 bg-white text-red-600 hover:bg-red-50 hover:text-red-600"
+                    >
+                      {isDisconnecting ? (
+                        <Loader2 className="mr-1 size-4 animate-spin" />
+                      ) : (
+                        <Unplug className="mr-1 size-4" />
                       )}
-                    </div>
-                  </div>
+                      {isDisconnecting ? "Disconnecting..." : "Disconnect"}
+                    </Button>
+                  ) : (
+                    <Button
+                      disabled={loading || isConnecting}
+                      onClick={() => handleConnect(item.id)}
+                      className="h-10 w-full rounded-xl bg-indigo-600 text-white shadow-sm hover:bg-indigo-700"
+                    >
+                      {isConnecting && (
+                        <Loader2 className="mr-1 size-4 animate-spin" />
+                      )}
+                      {loading
+                        ? "Loading..."
+                        : isConnecting
+                          ? "Connecting..."
+                          : "Connect"}
 
-                  <div className="flex shrink-0 gap-2">
-                    {connected ? (
-                      <Button
-                        variant="outline"
-                        disabled={loading || isDisconnecting}
-                        onClick={() => handleDisconnect(item.id)}
-                        className="rounded-xl border-red-400/20 bg-red-400/[0.06] text-red-300 hover:bg-red-400/10 hover:text-red-200"
-                      >
-                        <Unplug className="mr-2 h-4 w-4" />
-                        {isDisconnecting ? "Disconnecting..." : "Disconnect"}
-                      </Button>
-                    ) : (
-                      <Button
-                        disabled={loading || isConnecting}
-                        onClick={() => handleConnect(item.id)}
-                        className="rounded-xl border-0 bg-white text-zinc-900 hover:bg-zinc-200 hover:text-zinc-900"
-                      >
-                        {loading
-                          ? "Loading..."
-                          : isConnecting
-                            ? "Connecting..."
-                            : "Connect"}
-
-                        {!loading && !isConnecting && (
-                          <ArrowUpRight className="ml-2 h-4 w-4" />
-                        )}
-                      </Button>
-                    )}
-                  </div>
-                </CardContent>
-              </Card>
+                      {!loading && !isConnecting && (
+                        <ArrowUpRight className="ml-1 size-4" />
+                      )}
+                    </Button>
+                  )}
+                </div>
+              </div>
             );
           })}
         </div>
 
-        <p className="text-xs leading-relaxed text-zinc-600">
-          Your account credentials are not displayed here. Connected
-          integrations are managed securely by AutoMate AI.
-        </p>
+        <div className="mt-6 flex items-start gap-2.5 rounded-xl border border-slate-200/80 bg-white px-4 py-3 text-xs leading-relaxed text-slate-500">
+          <ShieldCheck className="mt-0.5 size-4 shrink-0 text-emerald-600" />
+          <p>
+            Your account credentials are not displayed here. Connected
+            integrations are managed securely by AutoMate AI.
+          </p>
+        </div>
       </div>
-    </div>
+    </AppShell>
   );
 }

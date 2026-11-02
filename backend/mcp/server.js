@@ -1,5 +1,13 @@
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import dotenv from "dotenv";
-dotenv.config();
+
+// The MCP SDK starts this process with only a minimal environment, so load
+// backend/.env by path (not by current folder) to always find the secrets.
+dotenv.config({
+  path: path.join(path.dirname(fileURLToPath(import.meta.url)), "..", ".env"),
+  quiet: true,
+});
 import { GoogleGenAI } from "@google/genai";
 import axios from "axios";
 import { McpServer } from "@modelcontextprotocol/server";
@@ -166,6 +174,29 @@ async function assertPublicHttpsUrl(rawUrl) {
 // ---------------------------------------------
 // HELPER: MCP ERROR RESPONSE
 // ---------------------------------------------
+
+// Turn a Google API error into a message the agent (and user) can act on
+function googleErrorMessage(error, fallback) {
+  const apiMessage =
+    error.response?.data?.error?.message ||
+    error.response?.data?.error_description ||
+    error.errors?.[0]?.message ||
+    "";
+
+  if (/has not been used in project|is disabled/i.test(apiMessage)) {
+    const api = /calendar/i.test(apiMessage) ? "Google Calendar API" : /gmail/i.test(apiMessage) ? "Gmail API" : "required Google API";
+    return `${fallback} The ${api} is not enabled in the app's Google Cloud project. The app owner must enable it in Google Cloud Console (APIs & Services > Library), then try again.`;
+  }
+
+  if (/invalid_grant|expired or revoked/i.test(apiMessage + (error.message || ""))) {
+    return `${fallback} Google access expired or was revoked. Reconnect Google on the Integrations page.`;
+  }
+
+  if (apiMessage) return `${fallback} Google said: ${apiMessage}`;
+
+  // Our own errors (e.g. "Google gmail is not connected...") are safe and useful to show
+  return error.message ? `${fallback} Reason: ${error.message}` : fallback;
+}
 
 function errorResponse(message) {
   return {
@@ -347,7 +378,7 @@ server.registerTool(
       console.error("send_email failed:", error.message);
 
       return errorResponse(
-        "Unable to send the email. Check the Gmail connection and server logs."
+        googleErrorMessage(error, "Unable to send the email.")
       );
     }
   }
@@ -473,7 +504,7 @@ Only execute after explicit user approval.
       );
 
       return errorResponse(
-        "Unable to create the calendar event. Check the Google Calendar connection and server logs."
+        googleErrorMessage(error, "Unable to create the calendar event.")
       );
     }
   }
@@ -575,7 +606,7 @@ This tool only reads events; it does not modify them.
       );
 
       return errorResponse(
-        "Unable to retrieve calendar events. Check the Google Calendar connection and server logs."
+        googleErrorMessage(error, "Unable to retrieve calendar events.")
       );
     }
   }
@@ -712,7 +743,7 @@ This tool is read-only and does not require approval.
       );
 
       return errorResponse(
-        "Unable to list emails. Check the Gmail connection, read permissions, and server logs."
+        googleErrorMessage(error, "Unable to list emails.")
       );
     }
   }
@@ -817,7 +848,7 @@ modify emails, and does not require approval.
       );
 
       return errorResponse(
-        "Unable to read this email. Check the Gmail connection, message ID, read permissions, and server logs."
+        googleErrorMessage(error, "Unable to read this email.")
       );
     }
   }

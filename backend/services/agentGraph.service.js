@@ -76,6 +76,11 @@ const SUPPORTED_MODELS = [
 const findTool = (tools, names) =>
   tools.find((tool) => names.includes(tool.name));
 
+// Groq rejects a tool call for a tool that wasn't sent with the request
+const isInvalidToolCall = (error) =>
+  error?.status === 400 &&
+  /tool_use_failed|not in request\.tools|tool call validation failed/i.test(error?.message || "");
+
 // --------------------------------------------------
 // AGENT CAPABILITIES -> TOOL NAMES
 // --------------------------------------------------
@@ -735,6 +740,12 @@ Requirements:
   // SYSTEM PROMPT
   // --------------------------------------------------
 
+  // Only describe the tools this agent really has. Describing tools it
+  // can't use (e.g. Gmail rules for a writing-only team agent) makes the
+  // model try to call them anyway.
+  const toolNames = agentTools.map((tool) => tool.name);
+  const has = (...names) => names.some((name) => toolNames.includes(name));
+
   const systemPrompt = `
 ${agent.instructions || "You are AutoMate AI, a helpful personal assistant."}
 
@@ -750,20 +761,24 @@ DEFAULT SETTINGS:
 - Ask only for essential missing information.
 - Never fabricate tool results.
 
+AVAILABLE TOOLS:
+- You can ONLY use these tools: ${toolNames.length ? toolNames.join(", ") : "none"}.
+- If a task needs any other tool, say in plain text what is missing. Never call a tool that is not listed.
+
 IMPORTANT ACTION RULE:
 - When the user directly requests an action, call the relevant tool.
 - The application handles approval through an approval card.
 - Do not ask for approval in your chat response.
 - Never claim an action succeeded unless the tool confirms success.
 
-EMAIL SENDING RULES:
+${has("send_email") ? `EMAIL SENDING RULES:
 1. Call send_email when the required details are available.
 2. Ask for the recipient only when it is missing and cannot be inferred.
 3. Never ask for passwords, tokens, API keys, or user IDs.
 4. The application requests approval before sending.
 5. Never claim an email was sent without tool confirmation.
 
-CALENDAR RULES:
+` : ""}${has("create_calendar_event", "list_calendar_events") ? `CALENDAR RULES:
 1. Call create_calendar_event when sufficient details are available.
 2. Do not ask "Would you like me to create it?"
 3. Resolve relative dates using the current date above.
@@ -774,7 +789,7 @@ CALENDAR RULES:
 8. Use list_calendar_events to retrieve existing events.
 9. Never claim an event was created without tool confirmation.
 
-GMAIL EMAIL READING RULES:
+` : ""}${has("list_emails", "read_email") ? `GMAIL EMAIL READING RULES:
 1. Use list_emails when the user asks to see or search emails.
 2. Use "in:inbox" for the latest inbox emails.
 3. Use "is:unread" for unread emails.
@@ -786,7 +801,7 @@ GMAIL EMAIL READING RULES:
 9. Reading and searching emails are read-only.
 10. Use list_emails and read_email, not their raw MCP tool names.
 
-INSTAGRAM PUBLISHING RULES:
+` : ""}${has("publish_instagram_image") ? `INSTAGRAM PUBLISHING RULES:
 1. If the latest user message asks to post, publish, share or upload an
    image to Instagram, call publish_instagram_image IMMEDIATELY.
    This applies even if the user also asks for a caption.
@@ -804,7 +819,7 @@ INSTAGRAM PUBLISHING RULES:
    message, ask the user to upload the image first.
 9. Never claim a post was published without tool confirmation.
 
-IMAGE ANALYSIS RULES:
+` : ""}${has("analyze_image") ? `IMAGE ANALYSIS RULES:
 1. If the user uploads an image or asks a question about an image,
    use analyze_image when the image URL is available.
 2. If the user uploads an image without a question, analyze it and
@@ -816,7 +831,7 @@ IMAGE ANALYSIS RULES:
 7. If image analysis fails, explain the failure honestly.
 8. Never claim to have viewed an image if analysis failed.
 
-GENERAL RULES:
+` : ""}GENERAL RULES:
 - Be concise and helpful.
 - Infer parameters when sufficient context is available.
 - Never substitute a natural-language promise for a tool call.
@@ -868,12 +883,29 @@ const chatNode = async (state) => {
       })
     : llmWithTools;
  
-  const response = await model.invoke([
-    new SystemMessage(systemPrompt),
-    ...messages,
-  ]);
- 
-  return { messages: [response] };
+  try {
+    const response = await model.invoke([
+      new SystemMessage(systemPrompt),
+      ...messages,
+    ]);
+
+    return { messages: [response] };
+  } catch (error) {
+    if (!isInvalidToolCall(error)) throw error;
+
+    // The model tried to call a tool this agent was not given (least
+    // privilege did its job). Answer in text instead of crashing the step.
+    console.warn("Blocked call to a tool this agent does not have; answering in text.");
+    const response = await llm.invoke([
+      new SystemMessage(systemPrompt),
+      ...messages,
+      new SystemMessage(
+        "You just tried to call a tool you do not have. You cannot use tools for this reply. Answer in plain text using only the information above, and clearly say what is missing."
+      ),
+    ]);
+
+    return { messages: [response] };
+  }
 };
 
   // --------------------------------------------------

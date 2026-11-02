@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link, useLocation } from "react-router-dom";
 import {
-  ArrowUp, Bot, ChevronDown, Coins, ImagePlus, LogOut, MessageSquare,
-  PanelLeftOpen, Plus, Settings, ShieldCheck, UserRound, Users, Workflow, Trash2,
+  ArrowUp, Bot, Check, ChevronDown, History, ImagePlus, MessageSquare,
+  Plus, Settings, Users, Workflow, Trash2,
 } from "lucide-react";
 
 import { fetchAgentsApi } from "@/features/agents/agentApi";
@@ -11,37 +11,29 @@ import {
   fetchConversationsApi, fetchConversationApi,
   updateConversationApi, deleteConversationApi,
 } from "@/features/conversations";
-import { logoutApi, updateSettingsApi } from "@/features/auth.js";
+import AppShell from "@/components/AppShell";
 import ChatSidebar from "@/components/ChatSidebar";
 import ApprovalCard from "@/components/ApprovalCard";
 import { buildApproval, describeAutoApprovals, getInterrupt } from "@/lib/approvals";
-import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem,
   DropdownMenuSeparator, DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { useDispatch, useSelector } from "react-redux";
-import { clearUser, setUser } from "@/redux/userSlice";
+import { setUser } from "@/redux/userSlice";
 
 const hideScrollbar =
   "[-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden";
-const darkPanel =
-  "border border-white/10 bg-white/[0.04] shadow-[0_20px_60px_rgba(0,0,0,0.35),inset_0_1px_0_rgba(255,255,255,0.06)] backdrop-blur-xl";
 const menuContent =
-  "rounded-2xl border border-white/10 bg-[#1d2026]/95 p-1.5 text-zinc-100 shadow-2xl shadow-black/50 backdrop-blur-xl";
-const menuItem = "rounded-xl text-zinc-300 focus:bg-white/10 focus:text-white";
-const menuSeparator = "bg-white/10";
-const iconBtn =
-  "size-9 rounded-xl border border-white/10 bg-white/[0.05] p-0 text-zinc-300 hover:bg-white/10 hover:text-white";
-const whiteBtn =
-  "rounded-xl border-0 bg-white text-zinc-900 hover:bg-zinc-200 hover:text-zinc-900";
+  "rounded-2xl border border-slate-200 bg-white p-1.5 text-slate-800 shadow-xl shadow-slate-900/10";
+const menuItem = "cursor-pointer gap-2 rounded-xl py-2 text-slate-700 focus:bg-slate-100 focus:text-slate-900";
 
 const CLOUDINARY_CLOUD_NAME = import.meta.env.VITE_CLOUDINARY_CLOUD_NAME;
 const CLOUDINARY_UPLOAD_PRESET = import.meta.env.VITE_CLOUDINARY_UPLOAD_PRESET;
 const MAX_IMAGE_SIZE = 10 * 1024 * 1024;
 
-const SIDEBAR_KEY = "automate.sidebarCollapsed";
+const SIDEBAR_KEY = "automate.historyCollapsed";
 
 function readSidebarCollapsed() {
   try {
@@ -62,7 +54,7 @@ function normalizeAssistantReply(reply) {
 }
 
 export default function Home() {
-  const navigate = useNavigate();
+  const location = useLocation();
   const dispatch = useDispatch();
   const fileInputRef = useRef(null);
   const { user: currentUser } = useSelector((state) => state.auth);
@@ -76,7 +68,6 @@ export default function Home() {
   const [threadId, setThreadId] = useState(null);
   const [chatLoading, setChatLoading] = useState(false);
   const [chatError, setChatError] = useState("");
-  const [logoutLoading, setLogoutLoading] = useState(false);
   const [pendingApproval, setPendingApproval] = useState(null);
   const [approvalLoading, setApprovalLoading] = useState(false);
 
@@ -160,9 +151,11 @@ export default function Home() {
   useEffect(() => {
     if (agents.length && !autoSelectedAgent.current) {
       autoSelectedAgent.current = true;
-      setSelectedAgent((current) => current ?? agents[0]);
+      const requestedId = location.state?.selectedAgentId;
+      const requested = agents.find((agent) => String(agent._id ?? agent.id) === String(requestedId));
+      setSelectedAgent((current) => requested ?? current ?? agents[0]);
     }
-  }, [agents]);
+  }, [agents, location.state?.selectedAgentId]);
 
   useEffect(() => {
     return () => {
@@ -265,7 +258,7 @@ export default function Home() {
     const userPrompt = prompt.trim();
     if (
       (!userPrompt && !selectedImage) ||
-      chatLoading || approvalLoading || logoutLoading ||
+      chatLoading || approvalLoading ||
       imageUploading || conversationLoading || pendingApproval || readOnlyNotice
     ) return;
 
@@ -485,237 +478,168 @@ export default function Home() {
     }
   };
 
-  const handleToggleAutoApprove = async () => {
-    const next = !currentUser?.autoApproveLowRisk;
-    dispatch(setUser({ ...currentUser, autoApproveLowRisk: next }));
-    try {
-      await updateSettingsApi({ autoApproveLowRisk: next });
-    } catch (error) {
-      dispatch(setUser({ ...currentUser, autoApproveLowRisk: !next }));
-      setChatError(error?.response?.data?.message || "Failed to update setting.");
-    }
-  };
-
   const handleSelectAgent = (agent) => {
     setSelectedAgent(agent);
     resetChat();
   };
 
-  const handleLogout = async () => {
-    if (logoutLoading) return;
-    try {
-      setLogoutLoading(true);
-      setChatError("");
-      await logoutApi();
-      dispatch(clearUser());
-      navigate("/login", { replace: true });
-    } catch (error) {
-      setChatError(error?.response?.data?.message || "Logout failed. Please try again.");
-    } finally {
-      setLogoutLoading(false);
-    }
-  };
-
   const firstName = currentUser?.name?.split(" ")[0] || "there";
-  const isBusy = chatLoading || approvalLoading || logoutLoading || imageUploading || conversationLoading;
+  const isBusy = chatLoading || approvalLoading || imageUploading || conversationLoading;
   const inputLocked = isBusy || Boolean(pendingApproval) || Boolean(readOnlyNotice);
   const selectedAgentId = String(selectedAgent?._id ?? selectedAgent?.id ?? "");
 
-  const isDesktop = () => window.matchMedia("(min-width: 768px)").matches;
-  const openSidebar = () => (isDesktop() ? setSidebarCollapsed(false) : setSidebarOpen(true));
-  const closeSidebar = () => (isDesktop() ? setSidebarCollapsed(true) : setSidebarOpen(false));
+  // History is an inline column on wide screens and a drawer below that
+  const isWide = () => window.matchMedia("(min-width: 1280px)").matches;
+  const toggleHistory = () => (isWide() ? setSidebarCollapsed((value) => !value) : setSidebarOpen(true));
+  const closeHistory = () => (isWide() ? setSidebarCollapsed(true) : setSidebarOpen(false));
+
+  const suggestions = selectedAgent
+    ? ["Summarise my unread emails", "Schedule a 30 min meeting tomorrow at 4 PM", "What's on my calendar this week?"]
+    : ["Explain LangGraph in simple words", "Write a polite leave application", "Give me 5 project viva questions"];
 
   return (
-    <div className="relative flex h-dvh overflow-hidden bg-[radial-gradient(ellipse_80%_60%_at_50%_0%,#2b2f3a_0%,#191b21_55%,#121317_100%)] text-white">
-      <div aria-hidden className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_at_center,transparent_40%,rgba(0,0,0,0.35)_100%)]" />
+    <AppShell
+      title={selectedAgent ? selectedAgent.name : "Chat"}
+      subtitle={selectedAgent ? "Agent chat · real actions need your approval" : "General chat · no tools"}
+      fullBleed
+      actions={
+        <button type="button" onClick={toggleHistory} title="Chat history" className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 shadow-sm hover:bg-slate-50">
+          <History size={15} /><span className="hidden sm:inline">History</span>
+        </button>
+      }
+    >
+      <div className="relative flex min-h-0 flex-1">
+        {sidebarOpen && (
+          <button type="button" aria-label="Close chat history" onClick={() => setSidebarOpen(false)} className="fixed inset-0 z-40 bg-slate-900/30 backdrop-blur-[2px] xl:hidden" />
+        )}
 
-      {/* Mobile: dark backdrop behind the drawer */}
-      {sidebarOpen && (
-        <button type="button" aria-label="Close sidebar" onClick={() => setSidebarOpen(false)} className="fixed inset-0 z-40 bg-black/60 md:hidden" />
-      )}
+        <aside className={`fixed inset-y-0 left-0 z-50 w-72 shrink-0 max-xl:transition-transform max-xl:duration-200 xl:relative xl:z-auto xl:translate-x-0 ${sidebarOpen ? "translate-x-0" : "-translate-x-full"} ${sidebarCollapsed ? "xl:hidden" : ""}`}>
+          <ChatSidebar
+            conversations={conversations}
+            loading={conversationsLoading}
+            error={conversationsError}
+            activeThreadId={threadId}
+            disabled={chatLoading || approvalLoading || conversationLoading}
+            search={historySearch}
+            onSearchChange={setHistorySearch}
+            onSelect={handleSelectConversation}
+            onNewChat={handleNewChat}
+            onRename={handleRenameConversation}
+            onTogglePin={handleTogglePin}
+            onDelete={handleDeleteConversation}
+            onClose={closeHistory}
+          />
+        </aside>
 
-      <aside className={`fixed inset-y-0 left-0 z-50 w-72 shrink-0 max-md:transition-transform max-md:duration-200 md:relative md:z-20 md:translate-x-0 ${sidebarOpen ? "translate-x-0" : "-translate-x-full"} ${sidebarCollapsed ? "md:hidden" : ""}`}>
-        <ChatSidebar
-          conversations={conversations}
-          loading={conversationsLoading}
-          error={conversationsError}
-          activeThreadId={threadId}
-          disabled={chatLoading || approvalLoading || conversationLoading}
-          search={historySearch}
-          onSearchChange={setHistorySearch}
-          onSelect={handleSelectConversation}
-          onNewChat={handleNewChat}
-          onRename={handleRenameConversation}
-          onTogglePin={handleTogglePin}
-          onDelete={handleDeleteConversation}
-          onClose={closeSidebar}
-          user={currentUser}
-        />
-      </aside>
+        <section className="flex min-h-0 min-w-0 flex-1 flex-col">
+          <div className="min-h-0 flex-1 overflow-y-auto">
+            <div className="mx-auto flex min-h-full w-full max-w-3xl flex-col gap-5 px-4 py-8 sm:px-6">
+              {conversationLoading && (
+                <div className="flex flex-1 items-center justify-center text-sm text-slate-500">Loading chat...</div>
+              )}
 
-      <div className="relative z-10 flex min-h-0 min-w-0 flex-1 flex-col">
-        <header className="z-30 flex h-16 shrink-0 items-center justify-between px-4 sm:px-6">
-          <div className="flex items-center gap-2.5">
-            <Button type="button" variant="outline" aria-label="Open chat history" title="Chat history" onClick={openSidebar} className={`${iconBtn} ${sidebarCollapsed ? "" : "md:hidden"}`}><PanelLeftOpen size={16} /></Button>
-            <Link to="/" className={`flex items-center gap-2.5 ${sidebarCollapsed ? "" : "md:hidden"}`}>
-              <span className="grid size-8 place-items-center rounded-lg bg-white text-zinc-900"><Workflow size={17} /></span>
-              <span className="hidden text-sm font-medium tracking-tight sm:inline">AutoMate AI</span>
-            </Link>
-          </div>
-          <div className="flex items-center gap-2.5">
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild><Button variant="outline" aria-label="Open menu" className={iconBtn}><Workflow size={16} /></Button></DropdownMenuTrigger>
-              <DropdownMenuContent align="end" className={`w-56 ${menuContent}`}>
-                <DropdownMenuItem asChild className={menuItem}><Link to="/agents" className="flex items-center gap-2.5 py-2.5"><Bot size={16} />My agents</Link></DropdownMenuItem>
-                <DropdownMenuSeparator className={menuSeparator} />
-                <DropdownMenuItem asChild className={menuItem}><Link to="/agents/new" className="flex items-center gap-2.5 py-2.5"><Plus size={16} />Create new agent</Link></DropdownMenuItem>
-                <DropdownMenuSeparator className={menuSeparator} />
-                <DropdownMenuItem asChild className={menuItem}><Link to="/team" className="flex items-center gap-2.5 py-2.5"><Users size={16} />Agent teams</Link></DropdownMenuItem>
-                <DropdownMenuSeparator className={menuSeparator} />
-                <DropdownMenuItem  className={`gap-2.5 py-2.5  ${menuItem}`}><Link to="/integrations" className="flex items-center gap-2.5 py-2.5"><Settings size={16} />Integrations </Link></DropdownMenuItem>
-                <DropdownMenuSeparator className={menuSeparator} />
-<DropdownMenuItem asChild className={menuItem}>
-  <Link to="/pricing" className="flex items-center gap-2.5 py-2.5">
-    <Coins size={16} />
-    Pricing
-  </Link>
-</DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <button type="button" aria-label="Open profile menu" className="flex size-9 items-center justify-center overflow-hidden rounded-xl border border-white/10 bg-white/[0.05]">
-                  {currentUser?.profilePicture ? <img src={currentUser.profilePicture} alt="Profile" referrerPolicy="no-referrer" className="size-full object-cover" /> : <UserRound size={17} className="text-zinc-300" />}
-                </button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" className={`w-64 ${menuContent}`}>
-                <DropdownMenuItem asChild className={`${menuItem} cursor-pointer`}>
-  <Link
-    to="/pricing"
-    className="flex items-center justify-between gap-3 py-2.5"
-  >
-    <span className="flex items-center gap-2.5">
-      <Coins size={16} className="text-violet-300" />
-      <span className="text-sm">Credits</span>
-    </span>
- 
-    <span className="flex items-center gap-2">
-      <span className="rounded-full bg-white/10 px-2.5 py-0.5 text-xs font-medium text-white">
-        {Number(currentUser?.credits ?? 0).toLocaleString("en-IN")}
-      </span>
-      <span className="text-[11px] text-zinc-500">Buy more</span>
-    </span>
-  </Link>
-</DropdownMenuItem>
-<DropdownMenuSeparator className={menuSeparator} />
-                <div className="flex items-center gap-3 px-3 py-3">
-                  <div className="min-w-0 flex-1"><p className="truncate text-sm font-medium">{currentUser?.name || "User"}</p><p className="truncate text-xs text-zinc-500">{currentUser?.email || ""}</p></div>
+              {!conversationLoading && messages.length === 0 && (
+                <div className="flex flex-1 flex-col items-center justify-center pb-6 text-center">
+                  <div className="mb-6 grid size-14 place-items-center rounded-2xl bg-gradient-to-br from-indigo-500 to-violet-600 text-white shadow-lg shadow-indigo-500/25"><Workflow size={26} /></div>
+                  <p className="text-base font-medium text-indigo-600">Hi, {firstName}</p>
+                  <h2 className="mt-1 text-2xl font-semibold tracking-tight text-slate-900 sm:text-3xl">Can I help you with anything?</h2>
+                  <p className="mt-3 max-w-md text-sm leading-6 text-slate-500">Ask questions, automate tasks, or upload an image to prepare an Instagram post.</p>
+                  <div className="mt-6 flex max-w-xl flex-wrap justify-center gap-2">
+                    {suggestions.map((suggestion) => (
+                      <button key={suggestion} type="button" disabled={inputLocked} onClick={() => setPrompt(suggestion)} className="rounded-full border border-slate-200 bg-white px-3.5 py-2 text-[13px] text-slate-600 shadow-sm transition hover:border-indigo-200 hover:text-slate-900 disabled:opacity-50">
+                        {suggestion}
+                      </button>
+                    ))}
+                    <Link to="/team" className="inline-flex items-center gap-1.5 rounded-full bg-rose-50 px-3.5 py-2 text-[13px] font-medium text-rose-600 ring-1 ring-rose-200 transition hover:bg-rose-100">
+                      <Users size={14} />Use an AI team for multi-step tasks
+                    </Link>
+                  </div>
                 </div>
-                <DropdownMenuSeparator className={menuSeparator} />
-                <DropdownMenuItem closeOnClick={false} onClick={handleToggleAutoApprove} className={`cursor-pointer gap-2.5 py-2.5 ${menuItem}`}>
-                  <ShieldCheck size={16} className="shrink-0 text-emerald-300" />
-                  <span className="min-w-0 flex-1">
-                    <span className="block text-sm">Auto-approve low risk</span>
-                    <span className="block text-[11px] text-zinc-500">Skip the card for safe, familiar actions</span>
-                  </span>
-                  <span role="switch" aria-checked={Boolean(currentUser?.autoApproveLowRisk)} className={`relative h-5 w-9 shrink-0 rounded-full transition-colors ${currentUser?.autoApproveLowRisk ? "bg-emerald-400" : "bg-white/15"}`}>
-                    <span className={`absolute top-0.5 size-4 rounded-full bg-white transition-all ${currentUser?.autoApproveLowRisk ? "left-[18px]" : "left-0.5"}`} />
-                  </span>
-                </DropdownMenuItem>
-                <DropdownMenuSeparator className={menuSeparator} />
-                <DropdownMenuItem onClick={(event) => { event.preventDefault(); handleLogout(); }} disabled={logoutLoading} className="cursor-pointer gap-2.5 rounded-xl py-2.5 text-red-400 focus:bg-red-500/10 focus:text-red-400"><LogOut size={16} />{logoutLoading ? "Logging out..." : "Logout"}</DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
+              )}
+
+              {messages.map((message, index) => (
+                <div key={`${message.role}-${index}`} className={`flex ${message.role === "user" ? "justify-end" : "justify-start"}`}>
+                  {message.role === "assistant" && message.kind !== "auto" && (
+                    <div className="mr-3 mt-1 grid size-8 shrink-0 place-items-center rounded-lg bg-gradient-to-br from-indigo-500 to-violet-600 text-white"><Workflow size={15} /></div>
+                  )}
+                  <div className={`max-w-[90%] break-words text-sm leading-7 sm:max-w-[80%] ${
+                    message.role === "user"
+                      ? "rounded-2xl rounded-br-md bg-indigo-600 px-4 py-3 text-white shadow-sm"
+                      : message.kind === "auto"
+                        ? "ml-11 rounded-xl border border-emerald-200 bg-emerald-50 px-3.5 py-2 text-xs leading-6 text-emerald-800"
+                        : "rounded-2xl rounded-tl-md border border-slate-200/80 bg-white px-4 py-3 text-slate-800 shadow-sm"
+                  }`}>
+                    {message.imageUrl && <img src={message.imageUrl} alt="Attached image" className="mb-3 max-h-64 rounded-lg object-contain" />}
+                    {message.content && <p className="whitespace-pre-wrap">{message.content}</p>}
+                  </div>
+                </div>
+              ))}
+
+              {pendingApproval && (
+                <ApprovalCard approval={pendingApproval} loading={approvalLoading} onDecision={handleApproval} />
+              )}
+
+              {chatLoading && (
+                <div className="flex items-center gap-3">
+                  <div className="grid size-8 place-items-center rounded-lg bg-gradient-to-br from-indigo-500 to-violet-600 text-white"><Workflow size={15} className="animate-pulse" /></div>
+                  <div className="text-sm text-slate-500">{imageUploading ? "Uploading image..." : "AutoMate AI is thinking..."}</div>
+                </div>
+              )}
+              {readOnlyNotice && <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">{readOnlyNotice}</div>}
+              {(chatError || agentsError) && <div role="alert" className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{chatError || agentsError}</div>}
+            </div>
           </div>
-        </header>
 
-        <main className="flex min-h-0 flex-1 flex-col">
-          <section className="flex min-h-0 flex-1 flex-col">
-            <div className={`min-h-0 flex-1 overflow-y-auto ${hideScrollbar}`}>
-              <div className="mx-auto flex min-h-full w-full max-w-3xl flex-col gap-5 px-4 py-8 sm:px-6">
-                {conversationLoading && (
-                  <div className="flex flex-1 items-center justify-center text-sm text-zinc-400">Loading chat...</div>
-                )}
-
-                {!conversationLoading && messages.length === 0 && (
-                  <div className="flex flex-1 flex-col items-center justify-center pb-8 text-center">
-                    <div className="mb-7 grid size-14 place-items-center rounded-2xl bg-white text-zinc-900"><Workflow size={26} /></div>
-                    <p className="text-base text-violet-300/80">Hi, {firstName}</p>
-                    <h1 className="mt-1 text-2xl font-semibold tracking-tight sm:text-3xl">Can I help you with anything?</h1>
-                    <p className="mt-4 max-w-sm text-xs leading-5 text-zinc-500">Ask questions, automate tasks, or upload an image to prepare an Instagram post.</p>
+          <div className="w-full shrink-0 px-3 pb-3 pt-2 sm:px-5 sm:pb-4">
+            <form onSubmit={handleSubmit} className="mx-auto w-full max-w-3xl rounded-2xl border border-slate-200 bg-white p-3 shadow-sm transition focus-within:border-indigo-300 focus-within:ring-4 focus-within:ring-indigo-500/10">
+              {imagePreview && (
+                <div className="mb-3 flex items-start gap-3 rounded-xl border border-slate-200 bg-slate-50 p-2.5">
+                  <img src={imagePreview} alt="Selected upload preview" className="size-20 rounded-lg object-cover" />
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-xs font-medium text-slate-700">{selectedImage?.name}</p>
+                    <p className="mt-1 text-[11px] text-slate-500">{uploadedImage ? "Uploaded" : "Will upload when sent"}</p>
+                    <input value={imageDescription} onChange={(e) => setImageDescription(e.target.value)} placeholder="Image description (optional)" className="mt-2 w-full border-b border-slate-200 bg-transparent py-1 text-xs text-slate-900 outline-none placeholder:text-slate-400 focus:border-indigo-400" />
                   </div>
-                )}
-
-                {messages.map((message, index) => (
-                  <div key={`${message.role}-${index}`} className={`flex ${message.role === "user" ? "justify-end" : "justify-start"}`}>
-                    {message.role === "assistant" && <div className="mr-3 mt-1 grid size-8 shrink-0 place-items-center rounded-lg bg-white text-zinc-900"><Workflow size={15} /></div>}
-                    <div className={`max-w-[90%] break-words px-4 py-3 text-sm leading-7 sm:max-w-[80%] ${message.role === "user" ? `rounded-2xl rounded-br-md text-white ${darkPanel}` : message.kind === "auto" ? "rounded-xl border border-emerald-400/15 bg-emerald-400/[0.06] text-xs leading-6 text-emerald-200" : "text-zinc-200"}`}>
-                      {message.imageUrl && <img src={message.imageUrl} alt="Attached image" className="mb-3 max-h-64 rounded-lg object-contain" />}
-                      {message.content && <p className="whitespace-pre-wrap">{message.content}</p>}
-                    </div>
-                  </div>
-                ))}
-
-                {pendingApproval && (
-                  <ApprovalCard approval={pendingApproval} loading={approvalLoading} onDecision={handleApproval} />
-                )}
-
-                {chatLoading && <div className="flex items-center gap-3"><div className="grid size-8 place-items-center rounded-lg bg-white text-zinc-900"><Workflow size={15} className="animate-pulse" /></div><div className="text-sm text-zinc-400">{imageUploading ? "Uploading image to Cloudinary..." : "AutoMate AI is thinking..."}</div></div>}
-                {readOnlyNotice && <div className="rounded-xl border border-amber-500/20 bg-amber-500/[0.08] px-4 py-3 text-sm text-amber-200">{readOnlyNotice}</div>}
-                {(chatError || agentsError) && <div className="rounded-xl border border-red-500/20 bg-red-500/[0.08] px-4 py-3 text-sm text-red-300">{chatError || agentsError}</div>}
+                  <button type="button" aria-label="Remove image" onClick={clearSelectedImage} className="grid size-8 place-items-center rounded-lg text-slate-400 hover:bg-red-50 hover:text-red-600"><Trash2 size={15} /></button>
+                </div>
+              )}
+              <Textarea value={prompt} onChange={(event) => setPrompt(event.target.value)} onKeyDown={(event) => {
+                if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
+                  event.preventDefault();
+                  event.currentTarget.form?.requestSubmit();
+                }
+              }} placeholder={selectedAgent ? `Message ${selectedAgent.name}...` : "Ask me anything..."} disabled={inputLocked} className={`min-h-16 resize-none border-0 !bg-transparent px-2 py-1.5 text-sm text-slate-900 shadow-none placeholder:text-slate-400 focus-visible:ring-0 ${hideScrollbar}`} />
+              <input ref={fileInputRef} type="file" accept="image/*" className="hidden" onChange={handleImageSelect} />
+              <div className="flex items-center justify-between gap-3 pt-2">
+                <div className="flex min-w-0 items-center gap-2">
+                  <button type="button" aria-label="Attach image" title="Attach image" disabled={inputLocked} onClick={() => fileInputRef.current?.click()} className="grid size-9 place-items-center rounded-lg text-slate-500 hover:bg-slate-100 hover:text-slate-800 disabled:opacity-40"><ImagePlus size={18} /></button>
+                  <DropdownMenu>
+                    <DropdownMenuTrigger disabled={isBusy} className="inline-flex h-9 max-w-52 items-center gap-2 rounded-lg border border-slate-200 bg-white px-2.5 text-xs font-medium text-slate-700 outline-none hover:bg-slate-50 focus-visible:ring-2 focus-visible:ring-indigo-500/30 disabled:opacity-50">
+                      <Bot size={14} className="shrink-0 text-violet-600" /><span className="truncate">{loading ? "Loading agents..." : selectedAgent?.name || "General chat"}</span><ChevronDown size={13} className="shrink-0 text-slate-400" />
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="start" side="top" className={`mb-2 w-64 ${menuContent}`}>
+                      <DropdownMenuItem onClick={() => handleSelectAgent(null)} className={menuItem}><MessageSquare size={15} className="shrink-0 text-slate-400" /><span className="truncate">General chat (no tools)</span>{!selectedAgent && <Check size={14} className="ml-auto text-indigo-600" />}</DropdownMenuItem>
+                      {!loading && !agents.length && <DropdownMenuItem disabled className={menuItem}>No agents yet</DropdownMenuItem>}
+                      {agents.map((agent) => {
+                        const id = String(agent._id ?? agent.id);
+                        return <DropdownMenuItem key={id} onClick={() => handleSelectAgent(agent)} className={menuItem}><Bot size={15} className="shrink-0 text-violet-600" /><span className="truncate">{agent.name}</span>{selectedAgentId === id && <Check size={14} className="ml-auto text-indigo-600" />}</DropdownMenuItem>;
+                      })}
+                      <DropdownMenuSeparator className="bg-slate-100" />
+                      <DropdownMenuItem asChild className={menuItem}><Link to="/agents/new"><Plus size={15} />Create new agent</Link></DropdownMenuItem>
+                      <DropdownMenuItem asChild className={menuItem}><Link to="/agents"><Settings size={15} />Manage agents</Link></DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                </div>
+                <div className="flex items-center gap-2">
+                  <button type="button" disabled={isBusy} onClick={handleNewChat} className="h-9 whitespace-nowrap rounded-lg px-2.5 text-xs font-medium text-slate-500 hover:bg-slate-100 hover:text-slate-800 disabled:opacity-40">New chat</button>
+                  <button type="submit" disabled={inputLocked || (!prompt.trim() && !selectedImage)} aria-label="Send message" className="grid size-9 shrink-0 place-items-center rounded-xl bg-indigo-600 text-white shadow-sm transition hover:bg-indigo-700 disabled:bg-slate-200 disabled:text-slate-400 disabled:shadow-none"><ArrowUp size={17} /></button>
+                </div>
               </div>
-            </div>
-
-            <div className="z-20 w-full shrink-0 px-3 pb-3 pt-2 sm:px-5 sm:pb-4">
-              <form onSubmit={handleSubmit} className={`mx-auto w-full max-w-2xl rounded-2xl p-3 transition-colors focus-within:border-white/25 ${darkPanel}`}>
-                {imagePreview && (
-                  <div className="mb-3 flex items-start gap-3 rounded-xl border border-white/10 bg-black/20 p-2.5">
-                    <img src={imagePreview} alt="Selected upload preview" className="size-20 rounded-lg object-cover" />
-                    <div className="min-w-0 flex-1">
-                      <p className="truncate text-xs text-zinc-300">{selectedImage?.name}</p>
-                      <p className="mt-1 text-[11px] text-zinc-500">{uploadedImage ? "Uploaded to Cloudinary" : "Will upload to Cloudinary when sent"}</p>
-                      <input value={imageDescription} onChange={(e) => setImageDescription(e.target.value)} placeholder="Image description (optional)" className="mt-2 w-full border-b border-white/10 bg-transparent py-1 text-xs text-white outline-none placeholder:text-zinc-500" />
-                    </div>
-                    <Button type="button" variant="ghost" size="icon" aria-label="Remove image" onClick={clearSelectedImage} className="size-8 text-zinc-400 hover:text-red-400"><Trash2 size={15} /></Button>
-                  </div>
-                )}
-                <Textarea value={prompt} onChange={(event) => setPrompt(event.target.value)} onKeyDown={(event) => {
-                  if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
-                    event.preventDefault();
-                    event.currentTarget.form?.requestSubmit();
-                  }
-                }} placeholder={selectedAgent ? `Message ${selectedAgent.name}...` : "Ask me anything..."} disabled={inputLocked} className={`min-h-20 resize-none border-0 !bg-transparent px-2 py-1.5 text-sm text-white shadow-none placeholder:text-zinc-500 focus-visible:ring-0 ${hideScrollbar}`} />
-                <input ref={fileInputRef} type="file" accept="image/*" className="hidden" onChange={handleImageSelect} />
-                <div className="flex items-center justify-between gap-3 pt-2">
-                  <div className="flex min-w-0 items-center gap-2">
-                    <Button type="button" variant="ghost" aria-label="Attach image" title="Attach image" disabled={inputLocked} onClick={() => fileInputRef.current?.click()} className="size-8 rounded-lg text-zinc-300 hover:bg-white/10 hover:text-white"><ImagePlus size={17} /></Button>
-                    <DropdownMenu>
-                      <DropdownMenuTrigger asChild><Button type="button" variant="ghost" disabled={isBusy} className="h-8 max-w-48 gap-2 rounded-lg border border-white/10 bg-white/[0.05] px-2.5 text-xs text-zinc-300 hover:bg-white/10 hover:text-white"><Bot size={14} className="shrink-0" /><span className="truncate">{loading ? "Loading agents..." : selectedAgent?.name || "General chat"}</span><ChevronDown size={12} /></Button></DropdownMenuTrigger>
-                      <DropdownMenuContent align="start" side="top" className={`mb-2 w-60 ${menuContent}`}>
-                        {loading && <DropdownMenuItem disabled className={menuItem}>Loading agents...</DropdownMenuItem>}
-                        <DropdownMenuItem onClick={() => handleSelectAgent(null)} className={`cursor-pointer gap-2 ${menuItem}`}><MessageSquare size={15} className="shrink-0 text-zinc-400" /><span className="truncate">General chat (no tools)</span>{!selectedAgent && <span className="ml-auto text-xs text-violet-300">✓</span>}</DropdownMenuItem>
-                        {!loading && !agents.length && <DropdownMenuItem disabled className={menuItem}>No agents found</DropdownMenuItem>}
-                        {agents.map((agent) => {
-                          const id = String(agent._id ?? agent.id);
-                          return <DropdownMenuItem key={id} onClick={() => handleSelectAgent(agent)} className={`cursor-pointer gap-2 ${menuItem}`}><Bot size={15} className="shrink-0 text-violet-300" /><span className="truncate">{agent.name}</span>{selectedAgentId === id && <span className="ml-auto text-xs text-violet-300">✓</span>}</DropdownMenuItem>;
-                        })}
-                        <DropdownMenuSeparator className={menuSeparator} />
-                        <DropdownMenuItem asChild className={menuItem}><Link to="/agents/new" className="flex items-center gap-2"><Plus size={15} />Create new agent</Link></DropdownMenuItem>
-                        <DropdownMenuItem asChild className={menuItem}><Link to="/agents" className="flex items-center gap-2"><Settings size={15} />Manage agents</Link></DropdownMenuItem>
-                      </DropdownMenuContent>
-                    </DropdownMenu>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <Button type="button" variant="ghost" disabled={isBusy} onClick={handleNewChat} className="h-8 rounded-lg px-3 text-xs text-zinc-400 hover:bg-white/10 hover:text-white">New chat</Button>
-                    <Button type="submit" size="icon" disabled={inputLocked || (!prompt.trim() && !selectedImage)} aria-label="Send message" className={`size-8 shrink-0 ${whiteBtn} disabled:bg-white/10 disabled:text-zinc-500`}><ArrowUp size={16} /></Button>
-                  </div>
-                </div>
-              </form>
-              <p className="mx-auto mt-3 max-w-2xl text-center text-[10px] text-zinc-600">AutoMate AI can make mistakes. Verify important information.</p>
-            </div>
-          </section>
-        </main>
+            </form>
+            <p className="mx-auto mt-2.5 max-w-3xl text-center text-[11px] text-slate-400">AutoMate AI can make mistakes. Verify important information.</p>
+          </div>
+        </section>
       </div>
-    </div>
+    </AppShell>
   );
 }

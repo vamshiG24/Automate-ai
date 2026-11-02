@@ -39,7 +39,7 @@ export const getApprovalStats = async (req, res) => {
       ]),
       ApprovalDecision.find({ userId: req.user._id })
         .sort({ createdAt: -1 })
-        .limit(10)
+        .limit(25)
         .select("toolName target riskScore riskLevel approved autoApproved source createdAt"),
     ]);
 
