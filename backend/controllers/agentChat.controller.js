@@ -84,6 +84,13 @@ export const chatWithAgent = async (req, res) => {
       });
     }
 
+    if (agent.kind === "team") {
+      return res.status(400).json({
+        success: false,
+        message: "This is an agent team. Use team chat for it.",
+      });
+    }
+
     const cost = getCreditCost("agentChat");
 
     // Check credits before the agent runs any LLM call or tool

@@ -1,5 +1,6 @@
-// Approval alerts: a short chime + a desktop notification.
-// The on/off preference is per device, so it lives in localStorage.
+// Approval alerts: a short chime + an in-app pop-up, or a desktop notification
+// when the page is out of view. The on/off preference is per device, so it lives in localStorage.
+import { toast } from "sonner";
 
 const PREF_KEY = "automate.approvalAlerts";
 
@@ -32,10 +33,30 @@ export const requestNotificationPermission = async () => {
 
 let audioContext;
 
+const getAudioContext = () => {
+  audioContext ??= new (window.AudioContext || window.webkitAudioContext)();
+  // Browsers start audio "suspended" until the page has been clicked
+  if (audioContext.state === "suspended") audioContext.resume();
+  return audioContext;
+};
+
+// Called on the user's first click: browsers only allow sound and the
+// notification permission prompt after a click on the page.
+export const unlockAlerts = () => {
+  try {
+    getAudioContext();
+  } catch {
+    // No Web Audio: alerts stay silent
+  }
+  if (alertsEnabled() && notificationsSupported() && Notification.permission === "default") {
+    Notification.requestPermission().catch(() => {});
+  }
+};
+
 // Two soft rising notes, generated in code (no sound file needed)
 export const playChime = () => {
   try {
-    audioContext ??= new (window.AudioContext || window.webkitAudioContext)();
+    getAudioContext();
     const start = audioContext.currentTime;
 
     [660, 880].forEach((frequency, index) => {
@@ -62,15 +83,27 @@ const pageOutOfView = () => document.hidden || !document.hasFocus();
 
 /**
  * Alert the user that an action is waiting for approval.
- * Desktop notification only when the page is out of view (otherwise the card is on screen).
- * `force` shows it anyway (used by the "Send test alert" button).
+ * In view: chime + in-app pop-up. Out of view: chime + desktop notification
+ * (falls back to the pop-up if notifications aren't allowed).
+ * `force` shows both (used by the "Send test alert" button).
  */
 export const alertApprovalNeeded = ({ title, body, onClick, tag = "automate-approval", force = false }) => {
   if (!alertsEnabled() && !force) return;
 
   playChime();
 
-  if (notificationsSupported() && Notification.permission === "granted" && (force || pageOutOfView())) {
+  const canNotify = notificationsSupported() && Notification.permission === "granted";
+
+  if (force || !pageOutOfView() || !canNotify) {
+    toast.warning(title, {
+      id: tag,
+      description: body,
+      duration: 10000,
+      action: onClick ? { label: "Open", onClick } : undefined,
+    });
+  }
+
+  if (canNotify && (force || pageOutOfView())) {
     // renotify: pop up again even if an older alert with the same tag is still listed
     const notification = new Notification(title, { body, tag, renotify: true, requireInteraction: true });
     notification.onclick = () => {

@@ -1,5 +1,38 @@
 import mongoose from "mongoose";
 
+// A member of an "agent team": its own job and its own tools (least privilege)
+const teamMemberSchema = new mongoose.Schema(
+  {
+    memberId: {
+      type: String,
+      required: true,
+    },
+
+    name: {
+      type: String,
+      required: true,
+      trim: true,
+      maxlength: 40,
+    },
+
+    // The specific work this member does
+    role: {
+      type: String,
+      required: true,
+      trim: true,
+      maxlength: 1000,
+    },
+
+    tools: [
+      {
+        type: String,
+        trim: true,
+      },
+    ],
+  },
+  { _id: false }
+);
+
 const agentSchema = new mongoose.Schema(
   {
     // Agent owner
@@ -65,6 +98,24 @@ const agentSchema = new mongoose.Schema(
         ref: "KnowledgeBase",
       },
     ],
+
+    // "single" = one agent, "team" = several members you chat with together
+    kind: {
+      type: String,
+      enum: ["single", "team"],
+      default: "single",
+    },
+
+    // Only for kind "team" (2-5 members)
+    members: [teamMemberSchema],
+
+    // "route" = a coordinator picks only the members a message needs,
+    // "pipeline" = every message goes through all members in order
+    teamMode: {
+      type: String,
+      enum: ["route", "pipeline"],
+      default: "route",
+    },
 
     // Agent status
     isActive: {

@@ -8,6 +8,7 @@ import {
   RefreshCw,
   Search,
   Trash2,
+  Users,
 } from "lucide-react";
 
 import {
@@ -18,6 +19,7 @@ import {
 import AppShell from "@/components/AppShell";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { seatColor } from "@/components/office/layout";
 
 // ---------------- LIGHT UI ----------------
 
@@ -103,14 +105,24 @@ function Agents() {
       title="Agents"
       subtitle="Manage your AI agents and choose one to get started."
       actions={
-        <Link
-          to="/agents/new"
-          className={`${primaryBtn} max-sm:size-9 max-sm:px-0`}
-          aria-label="Create agent"
-        >
-          <Plus size={17} className="shrink-0" />
-          <span className="hidden sm:inline">Create agent</span>
-        </Link>
+        <div className="flex items-center gap-2">
+          <Link
+            to="/agents/new?type=team"
+            className="inline-flex h-10 items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-4 text-sm font-medium text-slate-700 shadow-sm transition hover:bg-slate-50 max-sm:size-9 max-sm:px-0"
+            aria-label="Create agent team"
+          >
+            <Users size={17} className="shrink-0 text-rose-500" />
+            <span className="hidden sm:inline">Create team</span>
+          </Link>
+          <Link
+            to="/agents/new"
+            className={`${primaryBtn} max-sm:size-9 max-sm:px-0`}
+            aria-label="Create agent"
+          >
+            <Plus size={17} className="shrink-0" />
+            <span className="hidden sm:inline">Create agent</span>
+          </Link>
+        </div>
       }
     >
       <div className="mx-auto w-full max-w-6xl px-4 py-6 sm:px-8 sm:py-8">
@@ -167,6 +179,7 @@ function Agents() {
           <div className="mt-5 grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
             {filteredAgents.map((agent) => {
               const agentId = agent._id ?? agent.id;
+              const isTeam = agent.kind === "team";
 
               return (
                 <article
@@ -174,8 +187,8 @@ function Agents() {
                   className={`group flex min-h-52 flex-col p-5 transition hover:border-slate-300 hover:shadow-md ${card}`}
                 >
                   <div className="flex items-start justify-between gap-3">
-                    <div className="grid size-10 place-items-center rounded-xl bg-violet-50 text-violet-600">
-                      <Bot size={20} />
+                    <div className={`grid size-10 place-items-center rounded-xl ${isTeam ? "bg-rose-50 text-rose-500" : "bg-violet-50 text-violet-600"}`}>
+                      {isTeam ? <Users size={20} /> : <Bot size={20} />}
                     </div>
 
                     <button
@@ -202,9 +215,22 @@ function Agents() {
                     {agent.description || "No description provided."}
                   </p>
 
+                  {isTeam && (
+                    <ul className="mt-3 flex flex-wrap gap-1.5" aria-label="Team members">
+                      {agent.members?.map((member, index) => (
+                        <li key={member.memberId} className="inline-flex items-center gap-1.5 rounded-full bg-slate-100 py-0.5 pl-0.5 pr-2.5 text-[11px] font-medium text-slate-700">
+                          <span className="grid size-5 place-items-center rounded-full text-[10px] font-semibold text-white" style={{ backgroundColor: seatColor(index) }}>
+                            {member.name.slice(0, 1).toUpperCase()}
+                          </span>
+                          {member.name}
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+
                   <div className="mt-5 flex items-center justify-between gap-3 border-t border-slate-100 pt-4">
-                    <span className="rounded-full bg-violet-50 px-2.5 py-0.5 text-xs font-medium text-violet-700 ring-1 ring-violet-600/15">
-                      AI Agent
+                    <span className={`rounded-full px-2.5 py-0.5 text-xs font-medium ring-1 ${isTeam ? "bg-rose-50 text-rose-700 ring-rose-600/15" : "bg-violet-50 text-violet-700 ring-violet-600/15"}`}>
+                      {isTeam ? `Agent team · ${agent.members?.length ?? 0}` : "AI Agent"}
                     </span>
 
                     <Link
@@ -212,7 +238,7 @@ function Agents() {
                       state={{ selectedAgentId: agentId }}
                       className="inline-flex h-8 items-center gap-1.5 rounded-lg px-2.5 text-sm font-medium text-indigo-600 transition hover:bg-indigo-50 hover:text-indigo-700"
                     >
-                      <span>Use agent</span>
+                      <span>{isTeam ? "Chat with team" : "Use agent"}</span>
                       <ArrowRight size={15} className="shrink-0 transition group-hover:translate-x-0.5" />
                     </Link>
                   </div>

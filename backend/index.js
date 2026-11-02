@@ -17,6 +17,7 @@ import paymentRouter from "./routes/payment.routes.js";
 import teamRouter from "./routes/team.routes.js";
 import approvalRouter from "./routes/approval.routes.js";
 import automationRouter from "./routes/automation.routes.js";
+import teamChatRouter from "./routes/teamChat.routes.js";
 import { failInterruptedRuns } from "./services/teamRunner.service.js";
 import { startScheduler } from "./services/automation.service.js";
 
@@ -101,6 +102,7 @@ app.use("/api/team/plan", aiLimiter);
 app.use("/api/team", teamRouter);
 app.use("/api/approvals", approvalRouter);
 app.use("/api/automations", automationRouter);
+app.use("/api/team-chat", aiLimiter, teamChatRouter);
 app.use("/api/integrations", integrationRouter);
 app.use("/api/payment", paymentRouter);
 

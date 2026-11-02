@@ -34,6 +34,7 @@ export const saveConversation = async ({
   threadId,
   checkpointThreadId,
   agent = null,
+  kind = "agent",
   userMessage,
   reply,
   pendingApproval = null,
@@ -42,6 +43,7 @@ export const saveConversation = async ({
     const update = {
       $set: {
         checkpointThreadId,
+        kind,
         agentId: agent?._id ?? null,
         agentName: agent?.name ?? "",
         pendingApproval,

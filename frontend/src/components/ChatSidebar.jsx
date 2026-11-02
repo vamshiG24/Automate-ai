@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Bot, Ellipsis, MessageSquare, PanelLeftClose, Pencil, Pin,
-  PinOff, Search, SquarePen, Trash2, X,
+  PinOff, Search, SquarePen, Trash2, Users, X,
 } from "lucide-react";
 
 import {
@@ -89,9 +89,11 @@ function ConversationItem({ conversation, active, disabled, onSelect, onRename, 
         title={conversation.title}
         className="flex min-w-0 flex-1 items-center gap-2.5 px-3 py-2 text-left disabled:cursor-not-allowed"
       >
-        {conversation.agentId
-          ? <Bot size={15} className="shrink-0 text-violet-500" />
-          : <MessageSquare size={15} className="shrink-0 text-slate-400" />}
+        {conversation.kind === "team"
+          ? <Users size={15} className="shrink-0 text-rose-500" />
+          : conversation.agentId
+            ? <Bot size={15} className="shrink-0 text-violet-500" />
+            : <MessageSquare size={15} className="shrink-0 text-slate-400" />}
         <span className="min-w-0 flex-1">
           <span className={`block truncate text-[13px] ${active ? "font-medium text-slate-900" : "text-slate-700"}`}>{conversation.title}</span>
           {conversation.agentName && <span className="block truncate text-[11px] text-slate-400">{conversation.agentName}</span>}
@@ -131,6 +133,9 @@ function ConversationItem({ conversation, active, disabled, onSelect, onRename, 
 
 export default function ChatSidebar({
   conversations,
+  agentName,
+  scope,
+  onScopeChange,
   loading,
   error,
   activeThreadId,
@@ -183,6 +188,18 @@ export default function ChatSidebar({
             <button type="button" onClick={() => onSearchChange("")} aria-label="Clear search" className="text-slate-400 hover:text-slate-700"><X size={13} /></button>
           )}
         </label>
+        {agentName && (
+          <div role="tablist" aria-label="Which chats to show" className="grid grid-cols-2 rounded-xl bg-slate-100 p-0.5 text-xs font-medium">
+            {[
+              { value: "agent", label: agentName },
+              { value: "all", label: "All chats" },
+            ].map(({ value, label }) => (
+              <button key={value} type="button" role="tab" aria-selected={scope === value} onClick={() => onScopeChange(value)} title={label} className={`truncate rounded-lg px-2 py-1.5 transition ${scope === value ? "bg-white text-slate-900 shadow-sm" : "text-slate-500 hover:text-slate-800"}`}>
+                {label}
+              </button>
+            ))}
+          </div>
+        )}
       </div>
 
       <nav className={`min-h-0 flex-1 overflow-y-auto px-2 pb-3 ${hideScrollbar}`} aria-label="Chat history">
@@ -198,7 +215,11 @@ export default function ChatSidebar({
 
         {!loading && !error && !conversations.length && (
           <p className="px-3 py-6 text-center text-xs leading-5 text-slate-500">
-            {search ? "No chats match your search." : "Your conversations will appear here."}
+            {search
+              ? "No chats match your search."
+              : agentName && scope === "agent"
+                ? `No chats with ${agentName} yet.`
+                : "Your conversations will appear here."}
           </p>
         )}
 

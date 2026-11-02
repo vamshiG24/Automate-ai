@@ -1,6 +1,8 @@
 import Agent from "../models/agent.model.js";
 import Conversation from "../models/conversation.model.js";
+import TeamChat from "../models/teamChat.model.js";
 import { getCheckpointer } from "../config/langgraph-checkpointer.js";
+import mongoose from "mongoose";
 
 const validateThreadId = (threadId) =>
   typeof threadId === "string" &&
@@ -58,6 +60,7 @@ const toListItem = (conversation) => ({
   title: conversation.title,
   agentId: conversation.agentId,
   agentName: conversation.agentName,
+  kind: conversation.kind || "agent",
   lastMessage: conversation.lastMessage,
   messageCount: conversation.messageCount,
   pinned: conversation.pinned,
@@ -121,14 +124,6 @@ export const getConversationById = async (req, res) => {
       });
     }
 
-    const checkpointer = await getCheckpointer();
-    const tuple = await checkpointer.getTuple({
-      configurable: {
-        thread_id: conversation.checkpointThreadId,
-        checkpoint_ns: "",
-      },
-    });
-
     const agentExists = conversation.agentId
       ? Boolean(
           await Agent.exists({
@@ -137,6 +132,33 @@ export const getConversationById = async (req, res) => {
           })
         )
       : true;
+
+    // Team chats keep their shared memory (with member names) in TeamChat
+    if (conversation.kind === "team") {
+      const chat = await TeamChat.findOne({ userId: req.user._id, threadId });
+
+      return res.status(200).json({
+        success: true,
+        conversation: {
+          ...toListItem(conversation),
+          kind: "team",
+          agentDeleted: !agentExists,
+          pendingApproval: chat?.pending?.interrupts ?? null,
+          pendingMemberId: chat?.pending?.memberId ?? null,
+          messages: (chat?.messages || []).map(({ role, content, memberId, memberName, kind }) => ({
+            role, content, memberId, memberName, kind,
+          })),
+        },
+      });
+    }
+
+    const checkpointer = await getCheckpointer();
+    const tuple = await checkpointer.getTuple({
+      configurable: {
+        thread_id: conversation.checkpointThreadId,
+        checkpoint_ns: "",
+      },
+    });
 
     return res.status(200).json({
       success: true,
@@ -253,8 +275,16 @@ export const deleteConversation = async (req, res) => {
     }
 
     // Also remove the stored LangGraph memory for this thread
-    const checkpointer = await getCheckpointer();
-    await checkpointer.deleteThread(conversation.checkpointThreadId);
+    if (conversation.kind === "team") {
+      // Every member/turn has its own thread under this prefix
+      const prefix = `^${conversation.checkpointThreadId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}:`;
+      await TeamChat.deleteOne({ userId: req.user._id, threadId });
+      await mongoose.connection.collection("checkpoints").deleteMany({ thread_id: { $regex: prefix } });
+      await mongoose.connection.collection("checkpoint_writes").deleteMany({ thread_id: { $regex: prefix } });
+    } else {
+      const checkpointer = await getCheckpointer();
+      await checkpointer.deleteThread(conversation.checkpointThreadId);
+    }
 
     return res.status(200).json({
       success: true,

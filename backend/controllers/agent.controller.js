@@ -1,12 +1,47 @@
 import mongoose from "mongoose";
 import Agent from "../models/agent.model.js";
+import { CAPABILITY_IDS } from "../services/capabilities.js";
+
+// Clean and check the members of an agent team. Returns { members } or { error }.
+const validateMembers = (members) => {
+  if (!Array.isArray(members) || members.length < 2 || members.length > 5) {
+    return { error: "An agent team needs 2 to 5 members." };
+  }
+
+  const names = new Set();
+  const cleaned = [];
+
+  for (const [index, member] of members.entries()) {
+    const name = typeof member?.name === "string" ? member.name.trim() : "";
+    const role = typeof member?.role === "string" ? member.role.trim() : "";
+    const tools = Array.isArray(member?.tools) ? [...new Set(member.tools)] : [];
+
+    if (!name || name.length > 40) {
+      return { error: `Member ${index + 1} needs a name (max 40 characters).` };
+    }
+    if (names.has(name.toLowerCase())) {
+      return { error: `Two members are called "${name}". Use unique names.` };
+    }
+    if (!role || role.length > 1000) {
+      return { error: `Describe ${name}'s work (max 1000 characters).` };
+    }
+    if (tools.some((tool) => !CAPABILITY_IDS.includes(tool))) {
+      return { error: `${name} has an unknown tool.` };
+    }
+
+    names.add(name.toLowerCase());
+    cleaned.push({ memberId: `m${index + 1}`, name, role, tools });
+  }
+
+  return { members: cleaned };
+};
 
 
 // POST /api/agents
 // Create a new agent
 export const createAgent = async (req, res) => {
   try {
-    const { name, description, instructions, model, temperature, tools } =
+    const { name, description, instructions, model, temperature, tools, kind, members, teamMode } =
       req.body;
 
     if (!name?.trim() || !instructions?.trim()) {
@@ -14,6 +49,24 @@ export const createAgent = async (req, res) => {
         success: false,
         message: "Agent name and instructions are required.",
       });
+    }
+
+    let teamFields = {};
+
+    if (kind === "team") {
+      const result = validateMembers(members);
+
+      if (result.error) {
+        return res.status(400).json({ success: false, message: result.error });
+      }
+
+      // The team's own tool list is just a summary of what its members can do
+      teamFields = {
+        kind: "team",
+        teamMode: teamMode === "pipeline" ? "pipeline" : "route",
+        members: result.members,
+        tools: [...new Set(result.members.flatMap((member) => member.tools))],
+      };
     }
 
     const agent = await Agent.create({
@@ -24,6 +77,7 @@ export const createAgent = async (req, res) => {
       model,
       temperature,
       tools,
+      ...teamFields,
     });
 
     return res.status(201).json({
@@ -126,6 +180,7 @@ export const updateAgent = async (req, res) => {
       "tools",
       "knowledgeBases",
       "isActive",
+      "teamMode",
     ];
 
     const updates = {};
@@ -162,6 +217,13 @@ export const updateAgent = async (req, res) => {
       }
 
       updates.instructions = updates.instructions.trim();
+    }
+
+    if (updates.teamMode !== undefined && !["route", "pipeline"].includes(updates.teamMode)) {
+      return res.status(400).json({
+        success: false,
+        message: "teamMode must be route or pipeline.",
+      });
     }
 
     if (updates.provider !== undefined) {

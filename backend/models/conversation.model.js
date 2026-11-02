@@ -58,6 +58,13 @@ const conversationSchema = new mongoose.Schema(
       default: false,
     },
 
+    // "agent" = normal/agent chat, "team" = chat with an agent team
+    kind: {
+      type: String,
+      enum: ["agent", "team"],
+      default: "agent",
+    },
+
     // Approval card waiting for the user (email, calendar, Instagram)
     pendingApproval: {
       type: mongoose.Schema.Types.Mixed,

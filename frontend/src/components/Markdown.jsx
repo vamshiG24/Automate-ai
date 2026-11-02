@@ -1,7 +1,25 @@
 import { useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import remarkMath from "remark-math";
+import rehypeKatex from "rehype-katex";
+import "katex/dist/katex.min.css";
 import { Check, Copy } from "lucide-react";
+
+// Models often write LaTeX as \[ ... \] or \( ... \); remark-math expects $$ / $.
+// (Plain Markdown would otherwise turn "\[" into "[" and show raw \frac{..}.)
+// KaTeX rejects a bare "#" (e.g. \text{# outcomes}), so escape it inside math
+const escapeHash = (math) => math.replace(/(?<!\\)#/g, "\\#");
+
+// GPT-OSS sometimes writes browsing-style citations like 【1†L1-L4】 or 【1】;
+// show them as a plain " [1]" instead of the raw marker
+const cleanCitations = (text) => text.replace(/\s?【(\d+)(?:†[^】]*)?】/g, " [$1]");
+
+const normalizeMath = (text) =>
+  cleanCitations(text)
+    .replace(/\\\[([\s\S]+?)\\\]/g, (_, math) => `\n$$\n${escapeHash(math.trim())}\n$$\n`)
+    .replace(/\\\(([\s\S]+?)\\\)/g, (_, math) => `$${escapeHash(math.trim())}$`)
+    .replace(/\$\$([\s\S]+?)\$\$/g, (_, math) => `$$${escapeHash(math)}$$`);
 
 // Code block with a language label and a copy button
 function CodeBlock({ language, code }) {
@@ -57,6 +75,10 @@ const components = {
   // Fenced blocks arrive as <pre><code>; inline code stays inline
   pre: ({ children }) => {
     const child = Array.isArray(children) ? children[0] : children;
+    // Display math (already rendered by KaTeX) is not a code block
+    if (child?.props?.node?.tagName !== "code") {
+      return <div className="my-3 overflow-x-auto">{children}</div>;
+    }
     const className = child?.props?.className || "";
     const code = String(child?.props?.children ?? "").replace(/\n$/, "");
     return <CodeBlock language={className.replace("language-", "")} code={code} />;
@@ -73,8 +95,8 @@ const components = {
 export default function Markdown({ children, className = "" }) {
   return (
     <div className={`break-words ${className}`}>
-      <ReactMarkdown remarkPlugins={[remarkGfm]} components={components}>
-        {String(children ?? "")}
+      <ReactMarkdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[rehypeKatex]} components={components}>
+        {normalizeMath(String(children ?? ""))}
       </ReactMarkdown>
     </div>
   );

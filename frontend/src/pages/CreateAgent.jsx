@@ -1,12 +1,13 @@
 import { useState } from "react";
-import { useNavigate } from "react-router-dom";
-import { AlertCircle, Bot, Check, Plus, Wrench } from "lucide-react";
+import { useNavigate, useSearchParams } from "react-router-dom";
+import { AlertCircle, Bot, Check, Plus, Users, Wrench } from "lucide-react";
 
 import AppShell from "@/components/AppShell";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { createAgentApi } from "@/features/agents/agentApi";
+import TeamBuilder from "@/components/TeamBuilder";
 
 // ---------------- LIGHT UI ----------------
 
@@ -36,23 +37,26 @@ const availableTools = [
   },
   {
     id: "event.schedule",
-    name: "schedule events",
-    description: "Schdule Events On Google Calender",
+    name: "Calendar",
+    description: "See and schedule events on Google Calendar",
   },
   {
     id: "image.analyze",
     name: "Analyze Image",
-    description: "analyze image",
+    description: "Understand images you attach",
   },
   {
     id: "post.instagram",
     name: "Post on Instagram",
-    description: "publish Post on Instagram",
+    description: "Publish posts on Instagram",
   },
 ];
 
 export default function CreateAgent() {
   const navigate = useNavigate();
+  // ?type=team opens the Agent team builder
+  const [searchParams, setSearchParams] = useSearchParams();
+  const isTeam = searchParams.get("type") === "team";
 
   const [form, setForm] = useState({
     name: "",
@@ -122,10 +126,35 @@ const handleSubmit = async (event) => {
 
   return (
     <AppShell
-      title="Create agent"
-      subtitle="Configure your AI agent and define what it can do."
+      title={isTeam ? "Create agent team" : "Create agent"}
+      subtitle={isTeam ? "Several specialists you chat with together." : "Configure your AI agent and define what it can do."}
     >
       <div className="mx-auto w-full max-w-3xl px-4 py-6 sm:px-8 sm:py-8">
+        {/* Single agent vs team */}
+        <div role="tablist" aria-label="What to create" className="mb-6 grid grid-cols-2 gap-1 rounded-2xl border border-slate-200 bg-white p-1 shadow-sm">
+          {[
+            { team: false, label: "Single agent", hint: "One assistant", Icon: Bot },
+            { team: true, label: "Agent team", hint: "Specific work for each member", Icon: Users },
+          ].map(({ team, label, hint, Icon }) => (
+            <button
+              key={label}
+              type="button"
+              role="tab"
+              aria-selected={isTeam === team}
+              onClick={() => setSearchParams(team ? { type: "team" } : {})}
+              className={`flex items-center justify-center gap-2.5 rounded-xl px-3 py-2.5 text-left transition ${isTeam === team ? "bg-indigo-50 text-indigo-700 ring-1 ring-indigo-200" : "text-slate-600 hover:bg-slate-50"}`}
+            >
+              <Icon size={18} className="shrink-0" />
+              <span>
+                <span className="block text-sm font-semibold">{label}</span>
+                <span className="hidden text-[11px] text-slate-500 sm:block">{hint}</span>
+              </span>
+            </button>
+          ))}
+        </div>
+
+        {isTeam ? <TeamBuilder availableTools={availableTools} /> : (
+        <>
         {/* Intro */}
         <div className="mb-6 flex items-start gap-4">
           <div className="grid size-10 shrink-0 place-items-center rounded-xl bg-violet-50 text-violet-600">
@@ -333,6 +362,8 @@ const handleSubmit = async (event) => {
             </Button>
           </div>
         </form>
+        </>
+        )}
       </div>
     </AppShell>
   );

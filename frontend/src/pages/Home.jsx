@@ -2,10 +2,14 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useLocation } from "react-router-dom";
 import {
   ArrowUp, Bot, Check, ChevronDown, History, ImagePlus, MessageSquare,
-  Plus, Settings, Users, Workflow, Trash2,
+  Plus, Settings, Users, Workflow, Trash2, Route, ListOrdered, Building2, X, ChevronRight,
 } from "lucide-react";
+import LiveOffice from "@/components/office/LiveOffice";
+import { describeStep } from "@/components/office/status";
+import { seatColor } from "@/components/office/layout";
+import { approveTeamActionStream, sendTeamMessageStream } from "@/features/teamChat";
 
-import { fetchAgentsApi } from "@/features/agents/agentApi";
+import { fetchAgentsApi, updateAgentApi } from "@/features/agents/agentApi";
 import { sendMessageApi, agentChat, approveEmailApi } from "@/features/chat";
 import {
   fetchConversationsApi, fetchConversationApi,
@@ -45,6 +49,16 @@ function readSidebarCollapsed() {
   }
 }
 
+// "5 min ago", "Yesterday", "12 Oct"
+function timeAgo(date) {
+  const minutes = Math.round((Date.now() - new Date(date).getTime()) / 60000);
+  if (minutes < 1) return "Just now";
+  if (minutes < 60) return `${minutes} min ago`;
+  if (minutes < 24 * 60) return `${Math.round(minutes / 60)} h ago`;
+  if (minutes < 48 * 60) return "Yesterday";
+  return new Date(date).toLocaleDateString("en-IN", { day: "numeric", month: "short" });
+}
+
 function normalizeAssistantReply(reply) {
   if (typeof reply === "string") return reply;
   if (reply == null) return "";
@@ -59,6 +73,8 @@ export default function Home() {
   const location = useLocation();
   const dispatch = useDispatch();
   const fileInputRef = useRef(null);
+  const messagesEndRef = useRef(null);
+  const promptRef = useRef(null);
   const { user: currentUser } = useSelector((state) => state.auth);
 
   const [prompt, setPrompt] = useState("");
@@ -72,6 +88,13 @@ export default function Home() {
   const [chatError, setChatError] = useState("");
   const [pendingApproval, setPendingApproval] = useState(null);
   const [approvalLoading, setApprovalLoading] = useState(false);
+
+  // Agent team chat: live status of each member (drives the office animation)
+  const [memberStatus, setMemberStatus] = useState({});
+  const [teamActivity, setTeamActivity] = useState("");
+  const [officeOpen, setOfficeOpen] = useState(false);
+  // Sidebar shows only the selected agent's chats, or every chat
+  const [historyScope, setHistoryScope] = useState("agent");
 
   const [selectedImage, setSelectedImage] = useState(null);
   const [imagePreview, setImagePreview] = useState("");
@@ -261,6 +284,62 @@ export default function Home() {
     return true;
   };
 
+  // Keep the newest message, approval card or "working" line in view
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ block: "end", behavior: "smooth" });
+  }, [messages.length, pendingApproval, chatLoading, teamActivity]);
+
+  // Esc closes the office panel
+  useEffect(() => {
+    if (!officeOpen) return;
+    const onKey = (event) => event.key === "Escape" && setOfficeOpen(false);
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [officeOpen]);
+
+  // Live events from the team stream -> office animation + chat bubbles
+  const handleTeamEvent = (agentId) => {
+    let activeThreadId = threadId;
+    const setStatus = (memberId, status) => setMemberStatus((previous) => ({ ...previous, [memberId]: status }));
+
+    return (event, data) => {
+      if (event === "start") {
+        activeThreadId = data.threadId;
+        setThreadId(data.threadId);
+      } else if (event === "thinking") {
+        setTeamActivity("Coordinator is choosing who should work on this…");
+      } else if (event === "route") {
+        setTeamActivity(`Coordinator → ${data.steps.map((step) => step.memberName).join(" → ")}`);
+        setMemberStatus(Object.fromEntries(data.steps.map((step) => [step.memberId, "pending"])));
+      } else if (event === "member_start") {
+        setStatus(data.memberId, "running");
+        setTeamActivity(`${data.memberName} is working…`);
+      } else if (event === "member_done") {
+        setStatus(data.memberId, "completed");
+        setMessages((previous) => [...previous, { role: "assistant", content: data.content, memberId: data.memberId, memberName: data.memberName }]);
+        updateCredits(data.remainingCredits);
+      } else if (event === "message") {
+        setMessages((previous) => [...previous, data]);
+      } else if (event === "member_error") {
+        setStatus(data.memberId, "failed");
+        setMessages((previous) => [...previous, { role: "assistant", kind: "error", memberId: data.memberId, memberName: data.memberName, content: `${data.memberName} couldn't finish: ${data.message}` }]);
+      } else if (event === "approval") {
+        setStatus(data.memberId, "waiting_approval");
+        const built = buildApproval(getInterrupt({ interrupts: data.interrupts }), {
+          agentId, threadId: activeThreadId, team: true, memberName: data.memberName,
+        });
+        if (built) {
+          setPendingApproval(built.approval);
+          alertApprovalNeeded({ title: `${data.memberName} needs your approval`, body: "An action from your agent team is waiting in chat." });
+        }
+      } else if (event === "error") {
+        setChatError(data.message);
+      } else if (event === "done") {
+        setTeamActivity("");
+      }
+    };
+  };
+
   const handleSubmit = async (event) => {
     event.preventDefault();
     const userPrompt = prompt.trim();
@@ -307,6 +386,14 @@ export default function Home() {
       setPrompt("");
 
       const agentId = selectedAgent?._id ?? selectedAgent?.id;
+
+      if (selectedAgent?.kind === "team") {
+        await sendTeamMessageStream({ agentId, message, threadId }, handleTeamEvent(agentId));
+        loadConversations();
+        clearSelectedImage();
+        return;
+      }
+
       const response = selectedAgent
         ? await agentChat({ message, threadId, agentId })
         : await sendMessageApi({ message, threadId });
@@ -354,6 +441,22 @@ export default function Home() {
 
     setApprovalLoading(true);
     setChatError("");
+
+    if (pendingApproval.team) {
+      const approval = pendingApproval;
+      setPendingApproval(null);
+      try {
+        await approveTeamActionStream({ agentId: approval.agentId, threadId: approval.threadId, approved }, handleTeamEvent(approval.agentId));
+        loadConversations();
+      } catch (error) {
+        setChatError(error?.message || "Approval process failed. Please try again.");
+        setPendingApproval(approval);
+      } finally {
+        setApprovalLoading(false);
+      }
+      return;
+    }
+
     try {
       const response = await approveEmailApi({
         agentId: pendingApproval.agentId,
@@ -406,6 +509,8 @@ export default function Home() {
     setReadOnlyNotice("");
     setPrompt("");
     setChatError("");
+    setMemberStatus({});
+    setTeamActivity("");
     clearSelectedImage();
   };
 
@@ -445,11 +550,15 @@ export default function Home() {
         setReadOnlyNotice("This chat's agent is inactive. Start a new chat to continue.");
       } else {
         // Bring back an approval card the user left without answering
+        const isTeamChat = conversation.kind === "team";
+        const pendingMember = agent?.members?.find((member) => member.memberId === conversation.pendingMemberId);
         const restored = buildApproval(getInterrupt({ interrupts: conversation.pendingApproval }), {
           agentId,
           threadId: conversation.threadId,
+          ...(isTeamChat ? { team: true, memberName: pendingMember?.name } : {}),
         });
         if (restored) setPendingApproval(restored.approval);
+        if (restored && pendingMember) setMemberStatus({ [pendingMember.memberId]: "waiting_approval" });
       }
 
       setSidebarOpen(false);
@@ -508,19 +617,128 @@ export default function Home() {
   const toggleHistory = () => (isWide() ? setSidebarCollapsed((value) => !value) : setSidebarOpen(true));
   const closeHistory = () => (isWide() ? setSidebarCollapsed(true) : setSidebarOpen(false));
 
-  const suggestions = selectedAgent
-    ? ["Summarise my unread emails", "Schedule a 30 min meeting tomorrow at 4 PM", "What's on my calendar this week?"]
-    : ["Explain LangGraph in simple words", "Write a polite leave application", "Give me 5 project viva questions"];
+  const isTeam = selectedAgent?.kind === "team";
+
+  // Earlier chats with the selected agent or team
+  const agentConversations = selectedAgent
+    ? conversations.filter((conversation) => String(conversation.agentId ?? "") === selectedAgentId)
+    : [];
+  const sidebarConversations = selectedAgent && historyScope === "agent" ? agentConversations : conversations;
+
+  const openAgentHistory = () => {
+    setHistoryScope("agent");
+    if (isWide()) setSidebarCollapsed(false);
+    else setSidebarOpen(true);
+  };
+
+  const suggestions = isTeam
+    ? ["What can each of you do?", "Summarise my unread emails", "Draft a reply to my latest email"]
+    : selectedAgent
+      ? ["Summarise my unread emails", "Schedule a 30 min meeting tomorrow at 4 PM", "What's on my calendar this week?"]
+      : ["Explain LangGraph in simple words", "Write a polite leave application", "Give me 5 project viva questions"];
+
+  // Office: each member at a desk; idle members show "Ready"
+  const officeSteps = isTeam
+    ? selectedAgent.members.map((member) => ({
+        stepId: member.memberId,
+        agentName: member.name,
+        status: memberStatus[member.memberId] || "idle",
+        capabilities: member.tools || [],
+        dependsOn: [],
+      }))
+    : [];
+  const workingMember = officeSteps.find((step) => step.status === "running");
+  const nextMember = officeSteps.find((step) => step.status === "pending");
+  const busyText = nextMember
+    ? `Live · handing off to ${nextMember.agentName}`
+    : officeSteps.some((step) => step.status === "completed")
+      ? "Live · wrapping up"
+      : "Live · coordinator is choosing";
+  const officeHeadline = officeSteps.some((step) => step.status === "waiting_approval")
+    ? { live: true, text: "Live · waiting for your approval" }
+    : workingMember
+      ? { live: true, text: `Live · ${workingMember.agentName} is working` }
+      : (chatLoading || approvalLoading) && isTeam
+        ? { live: true, text: busyText }
+        : { live: false, text: `${selectedAgent?.name} · ${officeSteps.length} members ready` };
+  const describeMember = (step) =>
+    step.status === "idle" ? "Ready" : step.status === "pending" ? "Up next" : describeStep(step, officeSteps, "running");
+  const memberColor = (memberId) => {
+    const index = selectedAgent?.members?.findIndex((member) => member.memberId === memberId) ?? -1;
+    return index >= 0 ? seatColor(index) : "#6366f1";
+  };
+
+
+  // Switch how the team works; saved on the team so it sticks
+  const handleTeamMode = async (mode) => {
+    if (!isTeam || (selectedAgent.teamMode || "route") === mode) return;
+    const id = selectedAgent._id ?? selectedAgent.id;
+    const previous = selectedAgent;
+    const swap = (agent) => setAgents((list) => list.map((item) => ((item._id ?? item.id) === id ? agent : item)));
+
+    setSelectedAgent({ ...previous, teamMode: mode });
+    swap({ ...previous, teamMode: mode });
+    try {
+      await updateAgentApi(id, { teamMode: mode });
+    } catch (error) {
+      setSelectedAgent(previous);
+      swap(previous);
+      setChatError(error?.response?.data?.message || "Could not change the team mode.");
+    }
+  };
+
+  // Clicking a member starts a message addressed only to them
+  const mentionMember = (name) => {
+    if (inputLocked) return;
+    // Replace any existing leading @mentions of team members (and nothing else)
+    const names = selectedAgent.members
+      .map((member) => member.name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
+      .join("|");
+    const leadingMentions = new RegExp(`^(@(${names})[\\s,:]*)+`, "i");
+    setPrompt((current) => `@${name} ${current.replace(leadingMentions, "")}`);
+    promptRef.current?.focus();
+  };
+
+  const teamMode = selectedAgent?.teamMode || "route";
+  const statusDot = (status) =>
+    status === "running" ? "animate-pulse bg-violet-500"
+      : status === "waiting_approval" ? "bg-amber-500"
+        : status === "completed" ? "bg-emerald-500"
+          : status === "failed" ? "bg-red-500"
+            : status === "pending" ? "bg-sky-400" : "bg-slate-300";
+
+  const modeSwitch = (
+    <div role="radiogroup" aria-label="How the team works" className="inline-flex shrink-0 rounded-lg border border-slate-200 bg-white p-0.5 text-[11px] font-medium">
+      {[
+        { value: "route", label: "Smart routing", Icon: Route, hint: "The coordinator picks only the members a message needs" },
+        { value: "pipeline", label: "Full pipeline", Icon: ListOrdered, hint: "Every message goes through all members in order" },
+      ].map(({ value, label, Icon, hint }) => (
+        <button key={value} type="button" role="radio" aria-checked={teamMode === value} title={hint} disabled={isBusy} onClick={() => handleTeamMode(value)} className={`inline-flex items-center gap-1 rounded-md px-2 py-1 transition ${teamMode === value ? "bg-indigo-600 text-white shadow-sm" : "text-slate-600 hover:bg-slate-100"}`}>
+          <Icon size={12} />{label}
+        </button>
+      ))}
+    </div>
+  );
 
   return (
     <AppShell
       title={selectedAgent ? selectedAgent.name : "Chat"}
-      subtitle={selectedAgent ? "Agent chat · real actions need your approval" : "General chat · no tools"}
+      subtitle={isTeam
+        ? `Agent team · ${selectedAgent.members.length} members · ${(selectedAgent.teamMode || "route") === "pipeline" ? "every message goes through all members" : "a coordinator routes each message"}`
+        : selectedAgent ? "Agent chat · real actions need your approval" : "General chat · no tools"}
       fullBleed
       actions={
-        <button type="button" onClick={toggleHistory} title="Chat history" className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 shadow-sm hover:bg-slate-50">
-          <History size={15} /><span className="hidden sm:inline">History</span>
-        </button>
+        <>
+          <button type="button" onClick={toggleHistory} title="Chat history" className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 shadow-sm hover:bg-slate-50">
+            <History size={15} /><span className="hidden sm:inline">History</span>
+          </button>
+          {isTeam && (
+            <button type="button" onClick={() => setOfficeOpen(true)} title="Open the team office" className="relative inline-flex items-center gap-2 rounded-xl border border-indigo-200 bg-indigo-50 px-3 py-2 text-sm font-medium text-indigo-700 shadow-sm hover:bg-indigo-100">
+              <Building2 size={15} /><span className="hidden sm:inline">Office</span>
+              {officeHeadline.live && <span className="absolute -right-1 -top-1 size-2.5 animate-pulse rounded-full bg-red-500 ring-2 ring-white" aria-label="Team is working" />}
+            </button>
+          )}
+        </>
       }
     >
       <div className="relative flex min-h-0 flex-1">
@@ -530,7 +748,10 @@ export default function Home() {
 
         <aside className={`fixed inset-y-0 left-0 z-50 w-72 shrink-0 max-xl:transition-transform max-xl:duration-200 xl:relative xl:z-auto xl:translate-x-0 ${sidebarOpen ? "translate-x-0" : "-translate-x-full"} ${sidebarCollapsed ? "xl:hidden" : ""}`}>
           <ChatSidebar
-            conversations={conversations}
+            conversations={sidebarConversations}
+            agentName={selectedAgent?.name}
+            scope={historyScope}
+            onScopeChange={setHistoryScope}
             loading={conversationsLoading}
             error={conversationsError}
             activeThreadId={threadId}
@@ -558,7 +779,11 @@ export default function Home() {
                   <div className="mb-6 grid size-14 place-items-center rounded-2xl bg-gradient-to-br from-indigo-500 to-violet-600 text-white shadow-lg shadow-indigo-500/25"><Workflow size={26} /></div>
                   <p className="text-base font-medium text-indigo-600">Hi, {firstName}</p>
                   <h2 className="mt-1 text-2xl font-semibold tracking-tight text-slate-900 sm:text-3xl">Can I help you with anything?</h2>
-                  <p className="mt-3 max-w-md text-sm leading-6 text-slate-500">Ask questions, automate tasks, or attach an image and ask about it.</p>
+                  <p className="mt-3 max-w-md text-sm leading-6 text-slate-500">
+                    {isTeam
+                      ? <>Type <span className="font-medium text-slate-700">@{selectedAgent.members[0]?.name}</span> to ask one member. Open <span className="font-medium text-slate-700">Office</span> to watch the team or switch Smart routing / Full pipeline.</>
+                      : "Ask questions, automate tasks, or attach an image and ask about it."}
+                  </p>
                   <div className="mt-6 flex max-w-xl flex-wrap justify-center gap-2">
                     {suggestions.map((suggestion) => (
                       <button key={suggestion} type="button" disabled={inputLocked} onClick={() => setPrompt(suggestion)} className="rounded-full border border-slate-200 bg-white px-3.5 py-2 text-[13px] text-slate-600 shadow-sm transition hover:border-indigo-200 hover:text-slate-900 disabled:opacity-50">
@@ -569,21 +794,53 @@ export default function Home() {
                       <Users size={14} />Use an AI team for multi-step tasks
                     </Link>
                   </div>
+
+                  {agentConversations.length > 0 && (
+                    <div className="mt-8 w-full max-w-xl text-left">
+                      <div className="mb-2 flex items-center justify-between px-1">
+                        <p className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-400">Previous chats with {selectedAgent.name}</p>
+                        {agentConversations.length > 4 && (
+                          <button type="button" onClick={openAgentHistory} className="text-xs font-medium text-indigo-600 hover:text-indigo-800">See all {agentConversations.length}</button>
+                        )}
+                      </div>
+                      <div className="divide-y divide-slate-100 overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+                        {agentConversations.slice(0, 4).map((conversation) => (
+                          <button key={conversation.threadId} type="button" disabled={isBusy} onClick={() => handleSelectConversation(conversation.threadId)} className="flex w-full items-center gap-3 px-4 py-3 text-left transition hover:bg-slate-50 disabled:opacity-50">
+                            {isTeam ? <Users size={15} className="shrink-0 text-rose-500" /> : <Bot size={15} className="shrink-0 text-violet-500" />}
+                            <span className="min-w-0 flex-1">
+                              <span className="block truncate text-sm font-medium text-slate-800">{conversation.title}</span>
+                              {conversation.lastMessage && <span className="block truncate text-xs text-slate-500">{conversation.lastMessage}</span>}
+                            </span>
+                            {conversation.hasPendingApproval && <span className="shrink-0 rounded-full bg-amber-50 px-2 py-0.5 text-[10px] font-medium text-amber-700 ring-1 ring-amber-200">Needs approval</span>}
+                            <span className="shrink-0 text-[11px] text-slate-400">{timeAgo(conversation.updatedAt)}</span>
+                            <ChevronRight size={15} className="shrink-0 text-slate-300" />
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
                 </div>
               )}
 
               {messages.map((message, index) => (
                 <div key={`${message.role}-${index}`} className={`flex ${message.role === "user" ? "justify-end" : "justify-start"}`}>
                   {message.role === "assistant" && message.kind !== "auto" && (
-                    <div className="mr-3 mt-1 grid size-8 shrink-0 place-items-center rounded-lg bg-gradient-to-br from-indigo-500 to-violet-600 text-white"><Workflow size={15} /></div>
+                    message.memberName
+                      ? <div className="mr-3 mt-1 grid size-8 shrink-0 place-items-center rounded-lg text-xs font-semibold text-white shadow-sm" style={{ backgroundColor: memberColor(message.memberId) }} title={message.memberName}>{message.memberName.slice(0, 1).toUpperCase()}</div>
+                      : <div className="mr-3 mt-1 grid size-8 shrink-0 place-items-center rounded-lg bg-gradient-to-br from-indigo-500 to-violet-600 text-white"><Workflow size={15} /></div>
                   )}
                   <div className={`max-w-[90%] break-words text-sm leading-7 sm:max-w-[80%] ${
                     message.role === "user"
                       ? "rounded-2xl rounded-br-md bg-indigo-600 px-4 py-3 text-white shadow-sm"
                       : message.kind === "auto"
                         ? "ml-11 rounded-xl border border-emerald-200 bg-emerald-50 px-3.5 py-2 text-xs leading-6 text-emerald-800"
-                        : "rounded-2xl rounded-tl-md border border-slate-200/80 bg-white px-4 py-3 text-slate-800 shadow-sm"
+                        : message.kind === "error"
+                          ? "rounded-2xl rounded-tl-md border border-red-200 bg-red-50 px-4 py-3 text-red-800"
+                          : "rounded-2xl rounded-tl-md border border-slate-200/80 bg-white px-4 py-3 text-slate-800 shadow-sm"
                   }`}>
+                    {message.memberName && message.kind !== "auto" && (
+                      <p className="mb-1 text-xs font-semibold" style={{ color: memberColor(message.memberId) }}>{message.memberName}</p>
+                    )}
                     {message.imageUrl && <img src={message.imageUrl} alt="Attached image" className="mb-3 max-h-64 rounded-lg object-contain" />}
                     {message.content && (
                       message.role === "assistant" && message.kind !== "auto"
@@ -595,17 +852,26 @@ export default function Home() {
               ))}
 
               {pendingApproval && (
-                <ApprovalCard approval={pendingApproval} loading={approvalLoading} onDecision={handleApproval} />
+                <div className="space-y-2">
+                  {pendingApproval.memberName && (
+                    <p className="flex items-center gap-2 text-xs font-medium text-slate-600">
+                      <span className="size-2.5 rounded-full" style={{ backgroundColor: memberColor(selectedAgent?.members?.find((member) => member.name === pendingApproval.memberName)?.memberId) }} />
+                      {pendingApproval.memberName} wants to do this:
+                    </p>
+                  )}
+                  <ApprovalCard approval={pendingApproval} loading={approvalLoading} onDecision={handleApproval} />
+                </div>
               )}
 
               {chatLoading && (
                 <div className="flex items-center gap-3">
                   <div className="grid size-8 place-items-center rounded-lg bg-gradient-to-br from-indigo-500 to-violet-600 text-white"><Workflow size={15} className="animate-pulse" /></div>
-                  <div className="text-sm text-slate-500">{imageUploading ? "Uploading image..." : "AutoMate AI is thinking..."}</div>
+                  <div className="text-sm text-slate-500">{imageUploading ? "Uploading image..." : isTeam ? (teamActivity || "Your team is starting…") : "AutoMate AI is thinking..."}</div>
                 </div>
               )}
               {readOnlyNotice && <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">{readOnlyNotice}</div>}
               {(chatError || agentsError) && <div role="alert" className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{chatError || agentsError}</div>}
+              <div ref={messagesEndRef} aria-hidden />
             </div>
           </div>
 
@@ -627,24 +893,25 @@ export default function Home() {
                   event.preventDefault();
                   event.currentTarget.form?.requestSubmit();
                 }
-              }} placeholder={selectedAgent ? `Message ${selectedAgent.name}...` : "Ask me anything..."} disabled={inputLocked} className={`min-h-16 resize-none border-0 !bg-transparent px-2 py-1.5 text-sm text-slate-900 shadow-none placeholder:text-slate-400 focus-visible:ring-0 ${hideScrollbar}`} />
+              }} ref={promptRef} placeholder={isTeam ? `Message ${selectedAgent.name}… (or @${selectedAgent.members[0]?.name} to ask one member)` : selectedAgent ? `Message ${selectedAgent.name}...` : "Ask me anything..."} disabled={inputLocked} className={`min-h-16 resize-none border-0 !bg-transparent px-2 py-1.5 text-sm text-slate-900 shadow-none placeholder:text-slate-400 focus-visible:ring-0 ${hideScrollbar}`} />
               <input ref={fileInputRef} type="file" accept="image/*" className="hidden" onChange={handleImageSelect} />
               <div className="flex items-center justify-between gap-3 pt-2">
                 <div className="flex min-w-0 items-center gap-2">
                   <button type="button" aria-label="Attach image" title="Attach image" disabled={inputLocked} onClick={() => fileInputRef.current?.click()} className="grid size-9 place-items-center rounded-lg text-slate-500 hover:bg-slate-100 hover:text-slate-800 disabled:opacity-40"><ImagePlus size={18} /></button>
                   <DropdownMenu>
                     <DropdownMenuTrigger disabled={isBusy} className="inline-flex h-9 max-w-52 items-center gap-2 rounded-lg border border-slate-200 bg-white px-2.5 text-xs font-medium text-slate-700 outline-none hover:bg-slate-50 focus-visible:ring-2 focus-visible:ring-indigo-500/30 disabled:opacity-50">
-                      <Bot size={14} className="shrink-0 text-violet-600" /><span className="truncate">{loading ? "Loading agents..." : selectedAgent?.name || "General chat"}</span><ChevronDown size={13} className="shrink-0 text-slate-400" />
+                      {isTeam ? <Users size={14} className="shrink-0 text-rose-500" /> : <Bot size={14} className="shrink-0 text-violet-600" />}<span className="truncate">{loading ? "Loading agents..." : selectedAgent?.name || "General chat"}</span><ChevronDown size={13} className="shrink-0 text-slate-400" />
                     </DropdownMenuTrigger>
                     <DropdownMenuContent align="start" side="top" className={`mb-2 w-64 ${menuContent}`}>
                       <DropdownMenuItem onClick={() => handleSelectAgent(null)} className={menuItem}><MessageSquare size={15} className="shrink-0 text-slate-400" /><span className="truncate">General chat (no tools)</span>{!selectedAgent && <Check size={14} className="ml-auto text-indigo-600" />}</DropdownMenuItem>
                       {!loading && !agents.length && <DropdownMenuItem disabled className={menuItem}>No agents yet</DropdownMenuItem>}
                       {agents.map((agent) => {
                         const id = String(agent._id ?? agent.id);
-                        return <DropdownMenuItem key={id} onClick={() => handleSelectAgent(agent)} className={menuItem}><Bot size={15} className="shrink-0 text-violet-600" /><span className="truncate">{agent.name}</span>{selectedAgentId === id && <Check size={14} className="ml-auto text-indigo-600" />}</DropdownMenuItem>;
+                        return <DropdownMenuItem key={id} onClick={() => handleSelectAgent(agent)} className={menuItem}>{agent.kind === "team" ? <Users size={15} className="shrink-0 text-rose-500" /> : <Bot size={15} className="shrink-0 text-violet-600" />}<span className="truncate">{agent.name}</span>{agent.kind === "team" && <span className="rounded-full bg-rose-50 px-1.5 text-[10px] font-medium text-rose-600">team</span>}{selectedAgentId === id && <Check size={14} className="ml-auto text-indigo-600" />}</DropdownMenuItem>;
                       })}
                       <DropdownMenuSeparator className="bg-slate-100" />
                       <DropdownMenuItem asChild className={menuItem}><Link to="/agents/new"><Plus size={15} />Create new agent</Link></DropdownMenuItem>
+                      <DropdownMenuItem asChild className={menuItem}><Link to="/agents/new?type=team"><Users size={15} />Create agent team</Link></DropdownMenuItem>
                       <DropdownMenuItem asChild className={menuItem}><Link to="/agents"><Settings size={15} />Manage agents</Link></DropdownMenuItem>
                     </DropdownMenuContent>
                   </DropdownMenu>
@@ -658,6 +925,59 @@ export default function Home() {
             <p className="mx-auto mt-2.5 max-w-3xl text-center text-[11px] text-slate-400">AutoMate AI can make mistakes. Verify important information.</p>
           </div>
         </section>
+
+        {/* Team office: opens over the chat from the "Office" button and stays live */}
+        {isTeam && officeOpen && (
+          <>
+            <button type="button" aria-label="Close office" onClick={() => setOfficeOpen(false)} className="fixed inset-0 z-40 bg-slate-900/30 backdrop-blur-[2px]" />
+            <aside role="dialog" aria-label={`${selectedAgent.name} office`} className="fixed inset-y-0 right-0 z-50 flex w-full max-w-3xl flex-col bg-[#f5f6fa] shadow-2xl shadow-slate-900/20">
+              <div className="flex h-16 shrink-0 items-center gap-3 border-b border-slate-200/80 bg-white px-5">
+                <span className="grid size-9 place-items-center rounded-xl bg-indigo-50 text-indigo-600"><Building2 size={18} /></span>
+                <div className="min-w-0 flex-1">
+                  <h2 className="truncate text-[15px] font-semibold text-slate-900">{selectedAgent.name} office</h2>
+                  <p className="truncate text-xs text-slate-500">Watch your team work live. Your chat keeps running behind this panel.</p>
+                </div>
+                <button type="button" onClick={() => setOfficeOpen(false)} aria-label="Close office" title="Close (Esc)" className="grid size-9 place-items-center rounded-lg text-slate-400 hover:bg-slate-100 hover:text-slate-700"><X size={18} /></button>
+              </div>
+
+              <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-5">
+                <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+                  <LiveOffice steps={officeSteps} runStatus="running" headline={officeHeadline} describe={describeMember} />
+                </div>
+
+                <div className="flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-slate-200 bg-white px-4 py-3 shadow-sm">
+                  <div className="min-w-0">
+                    <p className="text-sm font-semibold text-slate-800">How the team works</p>
+                    <p className="text-xs text-slate-500">{teamMode === "pipeline" ? "Every message goes through all members in order." : "The coordinator picks only the members a message needs."}</p>
+                  </div>
+                  {modeSwitch}
+                </div>
+
+                <ul className="grid gap-2 sm:grid-cols-2">
+                  {officeSteps.map((step) => {
+                    const member = selectedAgent.members.find((item) => item.memberId === step.stepId);
+                    return (
+                      <li key={step.stepId}>
+                        <button type="button" disabled={inputLocked} onClick={() => { mentionMember(step.agentName); setOfficeOpen(false); }} title={`Ask only ${step.agentName}`} className="flex h-full w-full items-start gap-3 rounded-2xl border border-slate-200 bg-white px-4 py-3 text-left shadow-sm transition hover:border-indigo-300 disabled:opacity-60">
+                          <span className="grid size-9 shrink-0 place-items-center rounded-xl text-sm font-semibold text-white" style={{ backgroundColor: memberColor(step.stepId) }}>{step.agentName.slice(0, 1).toUpperCase()}</span>
+                          <span className="min-w-0 flex-1">
+                            <span className="flex items-center gap-2">
+                              <span className="truncate text-sm font-medium text-slate-900">{step.agentName}</span>
+                              <span className={`size-2 shrink-0 rounded-full ${statusDot(step.status)}`} />
+                              <span className="truncate text-[11px] text-slate-500">{describeMember(step)}</span>
+                            </span>
+                            {member?.role && <span className="mt-0.5 line-clamp-2 block text-xs leading-5 text-slate-500">{member.role}</span>}
+                          </span>
+                        </button>
+                      </li>
+                    );
+                  })}
+                </ul>
+                <p className="text-center text-[11px] text-slate-400">Click a member to ask only them.</p>
+              </div>
+            </aside>
+          </>
+        )}
       </div>
     </AppShell>
   );
