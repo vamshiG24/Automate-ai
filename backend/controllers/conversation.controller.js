@@ -11,7 +11,7 @@ const escapeRegex = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 const IMAGE_URL_LINE = /^Image URL:\s*(\S+)/im;
 const IMAGE_META_LINE =
-  /^(Image URL:|Image public ID:|Image description:|If I asked to publish)/i;
+  /^(Image URL:|Image public ID:|Image description:|Image analysis|If I asked to publish)/i;
 
 const contentToText = (content) => {
   if (typeof content === "string") return content;

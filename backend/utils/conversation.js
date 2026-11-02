@@ -2,7 +2,7 @@ import Conversation from "../models/conversation.model.js";
 
 // Lines the frontend appends to image messages; not useful in a title
 const IMAGE_META_LINE =
-  /^(Image URL:|Image public ID:|Image description:|If I asked to publish)/i;
+  /^(Image URL:|Image public ID:|Image description:|Image analysis|If I asked to publish)/i;
 
 export const cleanUserText = (text = "") =>
   String(text)

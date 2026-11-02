@@ -10,6 +10,7 @@ import Integrations from './pages/Integration';
 import Pricing from './pages/Pricing';
 import Team from './pages/Team';
 import Activity from './pages/Activity';
+import Automations from './pages/Automations';
 
 // Signed-in pages; anyone else sees the login page on the same URL
 const PRIVATE_ROUTES = [
@@ -18,6 +19,7 @@ const PRIVATE_ROUTES = [
   { path: "/agents", Page: Agents },
   { path: "/agents/new", Page: CreateAgent },
   { path: "/integrations", Page: Integrations },
+  { path: "/automations", Page: Automations },
   { path: "/activity", Page: Activity },
   { path: "/pricing", Page: Pricing },
 ];

@@ -13,6 +13,10 @@ Users create their own **custom agents** (name, instructions, model, temperature
 | **Agent Teams (new)** | One instruction → a Planner builds a team of specialist agents, each with **only the permissions its step needs**. Earlier agents' results are passed on as untrusted data |
 | **Risk-based approval (new)** | Every real action gets a 0-100 risk score with plain-English reasons. Learns from your past approve/reject decisions. Low-risk actions can be auto-approved; prompt-injection attempts are always flagged high |
 | **Live agent office (UI)** | The AI Team page shows an animated isometric office drawn in SVG. Every agent sits at its own desk; you can see it typing, raising a hand for approval or finishing its task, with live status bubbles |
+| **Scheduled automations** | Save a reviewed team as an automation (daily, weekdays or weekly, IST). A scheduler runs it with exactly the reviewed agents and permissions; risky actions still wait for approval |
+| **Approval alerts** | Chime, desktop notification, a badge on AI Team and "(1)" in the tab title whenever an action waits for you, including scheduled runs |
+| **Web search** | Agents with the Web Search capability search the internet (Tavily) and cite sources; results are treated as untrusted data |
+| **Formatted replies** | AI replies render Markdown: lists, tables, links and code blocks with a copy button (raw HTML is never rendered) |
 | **Activity dashboard** | Timeline of approvals, team runs and chats, plus safety stats and a risk-level breakdown |
 | Custom agents | Create agents with their own instructions, Groq model, temperature and an allow-list of tools |
 | Tool calling via MCP | A Model Context Protocol server exposes Gmail, Calendar, Instagram and Gemini Vision tools to the LangGraph agent |
@@ -76,7 +80,7 @@ The assessment is saved in the graph checkpoint *before* the approval node runs.
 ### Evaluation
 ```bash
 cd backend
-npm test           # 11 unit tests for the risk engine
+npm test           # 18 unit tests (risk engine + schedule maths)
 npm run evaluate   # 20 benign + attack scenarios, 3 approval policies compared
 ```
 
@@ -153,6 +157,10 @@ node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
 | POST | `/api/team/plan` | Planner builds a team for an instruction |
 | GET / PATCH / DELETE | `/api/team/runs/:id` | View, edit (before running) or delete a team run |
 | POST | `/api/team/runs/:id/execute`, `/approve` | Run the team, approve/reject a paused action |
+| GET / POST | `/api/automations` | List automations / save a team run as an automation |
+| PATCH / DELETE | `/api/automations/:id` | Pause, resume, reschedule or delete |
+| POST | `/api/automations/:id/run` | Run an automation now |
+| GET | `/api/team/pending` | Team runs waiting for approval (alerts + badge) |
 | GET | `/api/approvals/stats` | Safety statistics (auto-approved, rejected, injection flags) |
 | PATCH | `/api/auth/settings` | Toggle auto-approve for low-risk actions |
 | GET | `/api/integrations` | Connected accounts |

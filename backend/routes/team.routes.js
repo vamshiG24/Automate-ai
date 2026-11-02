@@ -7,6 +7,7 @@ import {
   executeRun,
   approveStep,
   deleteRun,
+  getPendingApprovals,
 } from "../controllers/team.controller.js";
 import { protect } from "../middleware/protect.js";
 
@@ -16,6 +17,7 @@ const teamRouter = express.Router();
 teamRouter.use(protect);
 
 teamRouter.post("/plan", createPlan);
+teamRouter.get("/pending", getPendingApprovals);
 teamRouter.get("/runs", getRuns);
 teamRouter.get("/runs/:id", getRun);
 teamRouter.patch("/runs/:id", updatePlan);

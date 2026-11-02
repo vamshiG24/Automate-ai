@@ -32,6 +32,12 @@ export const CAPABILITIES = {
     tools: ["publish_instagram_image"],
     risky: true,
   },
+  "web.search": {
+    label: "Web search",
+    description: "Search the internet for current information and return sources (read-only)",
+    tools: ["web_search"],
+    risky: false,
+  },
 };
 
 export const CAPABILITY_IDS = Object.keys(CAPABILITIES);

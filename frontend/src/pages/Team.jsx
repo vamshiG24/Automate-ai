@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { useSearchParams } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import { useDispatch, useSelector } from "react-redux";
 import {
-  Brain, CalendarDays, ChevronDown, ChevronUp, CircleCheck, CircleDashed,
+  Brain, CalendarClock, CalendarDays, ChevronDown, ChevronUp, CircleCheck, CircleDashed,
   CircleX, CornerDownRight, Hourglass, ImagePlus, LoaderCircle, Lock, Mail,
   Play, Plus, ScanEye, Send, ShieldAlert, ShieldCheck, Sparkles, Trash2, Users,
 } from "lucide-react";
@@ -20,6 +20,9 @@ import { describeStep } from "@/components/office/status";
 import { seatColor } from "@/components/office/layout";
 import { buildApproval, describeAutoApprovals, getInterrupt } from "@/lib/approvals";
 import { Textarea } from "@/components/ui/textarea";
+import Markdown from "@/components/Markdown";
+import ScheduleFields from "@/components/ScheduleFields";
+import { createAutomationApi } from "@/features/automations";
 
 const card = "rounded-2xl border border-slate-200/80 bg-white shadow-sm";
 const primaryBtn =
@@ -91,9 +94,9 @@ function StepOutput({ text }) {
   return (
     <div className="rounded-xl border border-slate-200 bg-slate-50/70 p-3.5">
       <p className={label}>Result</p>
-      <p className="mt-1.5 whitespace-pre-wrap break-words text-[13px] leading-6 text-slate-700">
+      <Markdown className="mt-1.5 text-[13px] leading-6 text-slate-700">
         {long && !open ? `${text.slice(0, 420)}…` : text}
-      </p>
+      </Markdown>
       {long && (
         <button type="button" onClick={() => setOpen(!open)} className="mt-1.5 inline-flex items-center gap-1 text-xs font-medium text-indigo-600 hover:text-indigo-700">
           {open ? <><ChevronUp size={13} />Show less</> : <><ChevronDown size={13} />Show full result</>}
@@ -203,6 +206,58 @@ function SafetyStats({ stats }) {
   );
 }
 
+// Save the reviewed plan of this run as a scheduled automation
+function SchedulePanel({ run, onClose }) {
+  const [name, setName] = useState(run.title);
+  const [schedule, setSchedule] = useState({ frequency: "weekdays", time: "08:00", dayOfWeek: 1 });
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+  const [saved, setSaved] = useState(false);
+
+  const save = async (event) => {
+    event.preventDefault();
+    setSaving(true);
+    setError("");
+    try {
+      await createAutomationApi({ runId: run.id, name: name.trim(), schedule });
+      setSaved(true);
+    } catch (saveError) {
+      setError(errorMessage(saveError, "Failed to save the automation."));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  if (saved) {
+    return (
+      <div className="mt-4 flex flex-wrap items-center gap-3 rounded-xl border border-teal-200 bg-teal-50 px-4 py-3 text-sm text-teal-800">
+        <CalendarClock size={16} className="shrink-0" />
+        <span className="min-w-0 flex-1">Scheduled! This team will now run automatically.</span>
+        <Link to="/automations" className="font-medium text-teal-700 underline underline-offset-2 hover:text-teal-900">View automations</Link>
+      </div>
+    );
+  }
+
+  return (
+    <form onSubmit={save} className="mt-4 space-y-3 rounded-xl border border-teal-200 bg-teal-50/40 p-4">
+      <div className="flex items-center gap-2 text-sm font-semibold text-slate-900"><CalendarClock size={16} className="text-teal-600" />Run this team on a schedule</div>
+      <p className="text-xs leading-5 text-slate-500">It reuses exactly these agents and permissions. Risky actions will still ask for your approval.</p>
+      <label className="grid gap-1.5 text-xs font-medium text-slate-600" htmlFor="automation-name">
+        Name
+        <input id="automation-name" value={name} maxLength={80} required onChange={(event) => setName(event.target.value)} className="h-10 rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-900 outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-500/15" />
+      </label>
+      <ScheduleFields value={schedule} onChange={setSchedule} idPrefix="team-schedule" />
+      {error && <p role="alert" className="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">{error}</p>}
+      <div className="flex justify-end gap-2">
+        <button type="button" onClick={onClose} className={secondaryBtn}>Cancel</button>
+        <button type="submit" disabled={saving || !name.trim()} className={primaryBtn}>
+          {saving ? <LoaderCircle size={15} className="animate-spin" /> : <CalendarClock size={15} />}Save schedule
+        </button>
+      </div>
+    </form>
+  );
+}
+
 export default function Team() {
   const dispatch = useDispatch();
   const { user } = useSelector((state) => state.auth);
@@ -218,6 +273,7 @@ export default function Team() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [highlighted, setHighlighted] = useState(null);
+  const [scheduling, setScheduling] = useState(false);
   const lastStatus = useRef(null);
 
   const refreshUser = useCallback(async () => {
@@ -453,7 +509,17 @@ export default function Team() {
               <section className={`${card} p-5`}>
                 <div className="flex flex-wrap items-center justify-between gap-3">
                   <h2 className="text-lg font-semibold tracking-tight text-slate-900">{run.title}</h2>
-                  {runStatus && <span className={`rounded-full px-2.5 py-1 text-xs font-medium ${runStatus.pill}`}>{runStatus.label}</span>}
+                  <div className="flex flex-wrap items-center gap-2">
+                    {run.trigger === "schedule" && (
+                      <span className="inline-flex items-center gap-1 rounded-full bg-teal-50 px-2.5 py-1 text-xs font-medium text-teal-700"><CalendarClock size={12} />Scheduled</span>
+                    )}
+                    {runStatus && <span className={`rounded-full px-2.5 py-1 text-xs font-medium ${runStatus.pill}`}>{runStatus.label}</span>}
+                    {run.trigger !== "schedule" && !scheduling && (
+                      <button type="button" onClick={() => setScheduling(true)} className={`${secondaryBtn} px-3 py-1.5 text-xs`}>
+                        <CalendarClock size={14} className="text-teal-600" />Schedule
+                      </button>
+                    )}
+                  </div>
                 </div>
                 <blockquote className="mt-3 border-l-2 border-indigo-200 pl-3 text-[13px] leading-6 text-slate-600">{run.instruction}</blockquote>
                 {run.reasoning && (
@@ -464,6 +530,7 @@ export default function Team() {
                     Review the plan. You can edit any agent's task or remove agents before running.
                   </p>
                 )}
+                {scheduling && <SchedulePanel key={run.id} run={run} onClose={() => setScheduling(false)} />}
               </section>
 
               <ol className="space-y-4" aria-label="Team agents">
@@ -506,7 +573,7 @@ export default function Team() {
               {finished && (
                 <section className={`${card} p-5`}>
                   <p className={label}>{run.status === "completed" ? "Final result" : "Result"}</p>
-                  {finalOutput && <p className="mt-2 whitespace-pre-wrap text-sm leading-7 text-slate-700">{finalOutput}</p>}
+                  {finalOutput && <Markdown className="mt-2 text-sm leading-7 text-slate-700">{finalOutput}</Markdown>}
                   {run.error && <p className="mt-2 text-sm text-red-600">{run.error}</p>}
                   <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
                     <span className="text-xs text-slate-500">Credits used: {run.creditsUsed}</span>
@@ -537,7 +604,10 @@ export default function Team() {
                       <span className={`grid size-7 shrink-0 place-items-center rounded-lg ${itemStatus.pill}`}><itemStatus.Icon size={14} /></span>
                       <span className="min-w-0">
                         <span className="block truncate text-[13px] font-medium text-slate-800">{item.title}</span>
-                        <span className="block text-[11px] text-slate-500">{item.stepCount} agent{item.stepCount === 1 ? "" : "s"} · {RUN_STATUS[item.status]?.label}</span>
+                        <span className="flex items-center gap-1 text-[11px] text-slate-500">
+                          {item.trigger === "schedule" && <CalendarClock size={11} className="text-teal-600" aria-label="Scheduled" />}
+                          {item.stepCount} agent{item.stepCount === 1 ? "" : "s"} · {RUN_STATUS[item.status]?.label}
+                        </span>
                       </span>
                     </button>
                     {item.status !== "running" && (

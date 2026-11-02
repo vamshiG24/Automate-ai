@@ -17,6 +17,8 @@ const toClient = (run) => ({
   title: run.title,
   reasoning: run.reasoning,
   status: run.status,
+  trigger: run.trigger,
+  automationId: run.automationId,
   creditsUsed: run.creditsUsed,
   error: run.error,
   createdAt: run.createdAt,
@@ -116,6 +118,7 @@ export const getRuns = async (req, res) => {
         id: run._id,
         title: run.title,
         status: run.status,
+        trigger: run.trigger,
         stepCount: run.steps.length,
         createdAt: run.createdAt,
       })),
@@ -327,5 +330,30 @@ export const deleteRun = async (req, res) => {
       success: false,
       message: "Failed to delete team run.",
     });
+  }
+};
+
+// GET /api/team/pending
+// Team runs waiting for the user's approval (used for alerts and badges)
+export const getPendingApprovals = async (req, res) => {
+  try {
+    const runs = await TeamRun.find({ userId: req.user._id, status: "waiting_approval" })
+      .sort({ updatedAt: -1 })
+      .limit(10)
+      .select("title trigger updatedAt");
+
+    return res.status(200).json({
+      success: true,
+      count: runs.length,
+      runs: runs.map((run) => ({
+        id: run._id,
+        title: run.title,
+        trigger: run.trigger,
+        updatedAt: run.updatedAt,
+      })),
+    });
+  } catch (error) {
+    console.error("Pending approvals error:", error.message);
+    return res.status(500).json({ success: false, message: "Failed to load pending approvals." });
   }
 };

@@ -7,7 +7,8 @@ import {
   hasEnoughCredits,
   insufficientCreditsResponse,
 } from "../utils/credits.js";
-import { saveConversation } from "../utils/conversation.js";
+import { cleanUserText, saveConversation } from "../utils/conversation.js";
+import { analyzeImageForChat, findImageUrl } from "../services/imageAnalysis.service.js";
 
 export const chatWithAI = async (req, res) => {
   try {
@@ -55,10 +56,26 @@ export const chatWithAI = async (req, res) => {
 
     const graph = await getChatGraph();
 
+    // Attached image: describe it with the vision tool first, so the
+    // text-only chat model can answer questions about it
+    let modelMessage = message.trim();
+    const imageUrl = findImageUrl(modelMessage);
+
+    if (imageUrl) {
+      let analysis;
+      try {
+        analysis = await analyzeImageForChat(imageUrl, cleanUserText(modelMessage));
+      } catch (error) {
+        console.error("Chat image analysis error:", error.message);
+        analysis = `(The image could not be analyzed: ${error.message}. Tell the user honestly.)`;
+      }
+      modelMessage += `\nImage analysis (from a vision model, use it to answer): ${String(analysis).replace(/\s+/g, " ").trim()}`;
+    }
+
     const result = await graph.invoke(
       {
         messages: [
-          new HumanMessage(message.trim()),
+          new HumanMessage(modelMessage),
         ],
       },
       {

@@ -13,8 +13,10 @@ import {
 } from "@/features/conversations";
 import AppShell from "@/components/AppShell";
 import ChatSidebar from "@/components/ChatSidebar";
+import Markdown from "@/components/Markdown";
 import ApprovalCard from "@/components/ApprovalCard";
 import { buildApproval, describeAutoApprovals, getInterrupt } from "@/lib/approvals";
+import { alertApprovalNeeded } from "@/lib/alerts";
 import { Textarea } from "@/components/ui/textarea";
 import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem,
@@ -250,6 +252,12 @@ export default function Home() {
       role: "assistant",
       content: built.note,
     }]);
+    alertApprovalNeeded({
+      title: "AutoMate AI needs your approval",
+      body: built.approval.risk
+        ? `${built.approval.risk.level === "high" ? "High-risk" : "An"} action is waiting in your chat.`
+        : "An action is waiting in your chat.",
+    });
     return true;
   };
 
@@ -273,14 +281,21 @@ export default function Home() {
 
       // Attach the public image URL and description to the message so the agent/MCP tool
       // can use the actual Cloudinary URL. The URL alone does not describe image contents.
-      let message = userPrompt || "Publish this image to my Instagram account.";
+      // Only agents allowed to post get Instagram wording; everyone else
+      // treats an image without text as "describe this".
+      const canPostInstagram = Boolean(selectedAgent?.tools?.includes("post.instagram"));
+      let message = userPrompt || (canPostInstagram
+        ? "Publish this image to my Instagram account."
+        : "What is in this image? Describe it.");
       if (image?.secure_url) {
         message += `\n\nImage URL: ${image.secure_url}`;
         message += `\nImage public ID: ${image.public_id || ""}`;
         if (imageDescription.trim()) {
           message += `\nImage description: ${imageDescription.trim()}`;
         }
-        message += "\nIf I asked to publish this on Instagram, prepare a caption and request approval before publishing.";
+        if (canPostInstagram) {
+          message += "\nIf I asked to publish this on Instagram, prepare a caption and request approval before publishing.";
+        }
       }
 
       // Show only what the user typed; the image metadata lines are for the agent
@@ -543,7 +558,7 @@ export default function Home() {
                   <div className="mb-6 grid size-14 place-items-center rounded-2xl bg-gradient-to-br from-indigo-500 to-violet-600 text-white shadow-lg shadow-indigo-500/25"><Workflow size={26} /></div>
                   <p className="text-base font-medium text-indigo-600">Hi, {firstName}</p>
                   <h2 className="mt-1 text-2xl font-semibold tracking-tight text-slate-900 sm:text-3xl">Can I help you with anything?</h2>
-                  <p className="mt-3 max-w-md text-sm leading-6 text-slate-500">Ask questions, automate tasks, or upload an image to prepare an Instagram post.</p>
+                  <p className="mt-3 max-w-md text-sm leading-6 text-slate-500">Ask questions, automate tasks, or attach an image and ask about it.</p>
                   <div className="mt-6 flex max-w-xl flex-wrap justify-center gap-2">
                     {suggestions.map((suggestion) => (
                       <button key={suggestion} type="button" disabled={inputLocked} onClick={() => setPrompt(suggestion)} className="rounded-full border border-slate-200 bg-white px-3.5 py-2 text-[13px] text-slate-600 shadow-sm transition hover:border-indigo-200 hover:text-slate-900 disabled:opacity-50">
@@ -570,7 +585,11 @@ export default function Home() {
                         : "rounded-2xl rounded-tl-md border border-slate-200/80 bg-white px-4 py-3 text-slate-800 shadow-sm"
                   }`}>
                     {message.imageUrl && <img src={message.imageUrl} alt="Attached image" className="mb-3 max-h-64 rounded-lg object-contain" />}
-                    {message.content && <p className="whitespace-pre-wrap">{message.content}</p>}
+                    {message.content && (
+                      message.role === "assistant" && message.kind !== "auto"
+                        ? <Markdown>{message.content}</Markdown>
+                        : <p className="whitespace-pre-wrap">{message.content}</p>
+                    )}
                   </div>
                 </div>
               ))}

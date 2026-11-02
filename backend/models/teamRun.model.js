@@ -132,6 +132,19 @@ const teamRunSchema = new mongoose.Schema(
       default: 0,
     },
 
+    // "manual" = started from the AI Team page, "schedule" = by an automation
+    trigger: {
+      type: String,
+      enum: ["manual", "schedule"],
+      default: "manual",
+    },
+
+    automationId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Automation",
+      default: null,
+    },
+
     error: {
       type: String,
       default: "",

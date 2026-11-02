@@ -1,8 +1,8 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link, NavLink, useNavigate } from "react-router-dom";
 import { useDispatch, useSelector } from "react-redux";
 import {
-  Activity, ArrowRight, Bot, ChevronsUpDown, Coins, LogOut, MessagesSquare,
+  Activity, ArrowRight, Bell, Bot, CalendarClock, ChevronsUpDown, Coins, LogOut, MessagesSquare,
   PanelLeft, Plug, ShieldCheck, Sparkles, UserRound, Users, Workflow, X,
 } from "lucide-react";
 
@@ -11,6 +11,11 @@ import {
   DropdownMenuSeparator, DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { logoutApi, updateSettingsApi } from "@/features/auth.js";
+import { fetchPendingApprovalsApi } from "@/features/automations";
+import {
+  alertApprovalNeeded, alertsEnabled, notificationsSupported,
+  requestNotificationPermission, setAlertsEnabled,
+} from "@/lib/alerts";
 import { clearUser, setUser } from "@/redux/userSlice";
 
 const NAV_KEY = "automate.navCollapsed";
@@ -18,7 +23,8 @@ const NAV_KEY = "automate.navCollapsed";
 // Each menu item gets its own soft colour tile, like a product dashboard
 const NAV_ITEMS = [
   { to: "/", label: "Chat", Icon: MessagesSquare, tile: "bg-sky-50 text-sky-600", end: true },
-  { to: "/team", label: "AI Team", Icon: Users, tile: "bg-rose-50 text-rose-500" },
+  { to: "/team", label: "AI Team", Icon: Users, tile: "bg-rose-50 text-rose-500", badge: "approvals" },
+  { to: "/automations", label: "Automations", Icon: CalendarClock, tile: "bg-teal-50 text-teal-600" },
   { to: "/agents", label: "Agents", Icon: Bot, tile: "bg-violet-50 text-violet-600" },
   { to: "/integrations", label: "Integrations", Icon: Plug, tile: "bg-emerald-50 text-emerald-600" },
   { to: "/activity", label: "Activity", Icon: Activity, tile: "bg-amber-50 text-amber-600" },
@@ -28,6 +34,63 @@ const NAV_ITEMS = [
 const menuContent =
   "rounded-2xl border border-slate-200 bg-white p-1.5 text-slate-800 shadow-xl shadow-slate-900/10";
 const menuItem = "cursor-pointer gap-2.5 rounded-xl py-2.5 text-slate-700 focus:bg-slate-100 focus:text-slate-900";
+
+const POLL_MS = 20 * 1000;
+
+// Watches for team runs (including scheduled ones) that wait for approval.
+// A run that newly appears triggers a chime + desktop notification.
+function usePendingApprovals() {
+  const navigate = useNavigate();
+  const [pending, setPending] = useState({ count: 0, runs: [] });
+  const seen = useRef(null);
+
+  useEffect(() => {
+    let active = true;
+
+    const check = async () => {
+      try {
+        const data = await fetchPendingApprovalsApi();
+        if (!active) return;
+
+        // The first check only records what is already waiting
+        if (seen.current) {
+          const fresh = data.runs.find((run) => !seen.current.has(String(run.id)));
+          if (fresh) {
+            alertApprovalNeeded({
+              title: "Your AI team needs your approval",
+              body: `${fresh.title}${fresh.trigger === "schedule" ? " (scheduled)" : ""} is waiting for you.`,
+              tag: `automate-run-${fresh.id}`,
+              onClick: () => navigate(`/team?run=${fresh.id}`),
+            });
+          }
+        }
+
+        seen.current = new Set(data.runs.map((run) => String(run.id)));
+        setPending(data);
+      } catch {
+        // Offline or logged out: try again on the next tick
+      }
+    };
+
+    const first = setTimeout(check, 0);
+    const timer = setInterval(check, POLL_MS);
+    window.addEventListener("focus", check);
+
+    return () => {
+      active = false;
+      clearTimeout(first);
+      clearInterval(timer);
+      window.removeEventListener("focus", check);
+    };
+  }, [navigate]);
+
+  // "(1) AutoMate AI" in the browser tab while something waits
+  useEffect(() => {
+    document.title = pending.count ? `(${pending.count}) AutoMate AI` : "AutoMate AI";
+  }, [pending.count]);
+
+  return pending;
+}
 
 function readCollapsed() {
   try {
@@ -47,11 +110,43 @@ export function Avatar({ user, size = "size-9" }) {
   );
 }
 
-function Sidebar({ onNavigate, onCollapse }) {
+function Sidebar({ onNavigate, onCollapse, pendingCount }) {
   const dispatch = useDispatch();
   const navigate = useNavigate();
   const { user } = useSelector((state) => state.auth);
   const [loggingOut, setLoggingOut] = useState(false);
+  const [alertsOn, setAlertsOn] = useState(alertsEnabled);
+
+  const toggleAlerts = async () => {
+    const next = !alertsOn;
+    setAlertsOn(next);
+    setAlertsEnabled(next);
+    // Ask for desktop notifications from this click (browsers require it)
+    if (next) await requestNotificationPermission();
+  };
+
+  const notificationsBlocked = notificationsSupported() && Notification.permission === "denied";
+
+  // Lets the user check browser + Windows notification settings in one click.
+  // The result is also shown in the menu, because a blocked browser shows no popup.
+  const [testStatus, setTestStatus] = useState("");
+
+  const sendTestAlert = async () => {
+    const permission = await requestNotificationPermission();
+    alertApprovalNeeded({
+      title: "AutoMate AI test alert",
+      body: "Desktop notifications are working.",
+      tag: "automate-test",
+      force: true,
+    });
+    setTestStatus(
+      permission === "granted"
+        ? "Sent ✓ If no popup appeared, check Windows notification settings."
+        : permission === "unsupported"
+          ? "This browser doesn't support desktop notifications (sound only)."
+          : "Blocked in this browser: allow notifications from the lock icon in the address bar."
+    );
+  };
 
   const toggleAutoApprove = async () => {
     const next = !user?.autoApproveLowRisk;
@@ -105,7 +200,7 @@ function Sidebar({ onNavigate, onCollapse }) {
       <nav className="mt-6 min-h-0 flex-1 overflow-y-auto px-3" aria-label="Main">
         <p className="px-3 pb-2 text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-400">Menu</p>
         <ul className="space-y-1">
-          {NAV_ITEMS.map(({ to, label, Icon, tile, end }) => (
+          {NAV_ITEMS.map(({ to, label, Icon, tile, end, badge }) => (
             <li key={to}>
               <NavLink
                 to={to}
@@ -118,7 +213,12 @@ function Sidebar({ onNavigate, onCollapse }) {
                 }
               >
                 <span className={`grid size-9 place-items-center rounded-lg ${tile}`}><Icon size={18} /></span>
-                {label}
+                <span className="flex-1">{label}</span>
+                {badge === "approvals" && pendingCount > 0 && (
+                  <span className="grid min-w-5 place-items-center rounded-full bg-amber-500 px-1.5 text-[11px] font-semibold leading-5 text-white" title={`${pendingCount} waiting for your approval`}>
+                    {pendingCount}
+                  </span>
+                )}
               </NavLink>
             </li>
           ))}
@@ -161,6 +261,23 @@ function Sidebar({ onNavigate, onCollapse }) {
               <span className={`absolute top-0.5 size-4 rounded-full bg-white shadow transition-all ${user?.autoApproveLowRisk ? "left-[18px]" : "left-0.5"}`} />
             </span>
           </DropdownMenuItem>
+          <DropdownMenuItem closeOnClick={false} onClick={toggleAlerts} className={menuItem}>
+            <Bell size={16} className="shrink-0 text-amber-500" />
+            <span className="min-w-0 flex-1">
+              <span className="block text-sm">Approval alerts</span>
+              <span className="block text-[11px] text-slate-500">{notificationsBlocked ? "Sound only: notifications are blocked in this browser" : "Sound + desktop notification"}</span>
+            </span>
+            <span role="switch" aria-checked={alertsOn} className={`relative h-5 w-9 shrink-0 rounded-full transition-colors ${alertsOn ? "bg-amber-500" : "bg-slate-200"}`}>
+              <span className={`absolute top-0.5 size-4 rounded-full bg-white shadow transition-all ${alertsOn ? "left-[18px]" : "left-0.5"}`} />
+            </span>
+          </DropdownMenuItem>
+          <DropdownMenuItem closeOnClick={false} onClick={sendTestAlert} className={menuItem}>
+            <Bell size={16} className="shrink-0 text-slate-400" />
+            <span className="min-w-0 flex-1">
+              <span className="block text-sm">Send test alert</span>
+              {testStatus && <span className="block text-[11px] text-slate-500" role="status">{testStatus}</span>}
+            </span>
+          </DropdownMenuItem>
           <DropdownMenuSeparator className="bg-slate-100" />
           <DropdownMenuItem onClick={logout} disabled={loggingOut} className="cursor-pointer gap-2.5 rounded-xl py-2.5 text-red-600 focus:bg-red-50 focus:text-red-600">
             <LogOut size={16} />{loggingOut ? "Logging out..." : "Logout"}
@@ -180,6 +297,7 @@ export default function AppShell({ title, subtitle, actions, children, fullBleed
   const { user } = useSelector((state) => state.auth);
   const [collapsed, setCollapsed] = useState(readCollapsed);
   const [mobileOpen, setMobileOpen] = useState(false);
+  const pending = usePendingApprovals();
 
   useEffect(() => {
     try {
@@ -203,13 +321,14 @@ export default function AppShell({ title, subtitle, actions, children, fullBleed
       <aside
         className={`fixed inset-y-0 left-0 z-50 w-[272px] shrink-0 border-r border-slate-200/80 max-lg:transition-transform max-lg:duration-200 lg:relative lg:z-auto lg:translate-x-0 ${mobileOpen ? "translate-x-0" : "-translate-x-full"} ${collapsed ? "lg:hidden" : ""}`}
       >
-        <Sidebar onNavigate={() => setMobileOpen(false)} onCollapse={() => setMobileOpen(false)} />
+        <Sidebar onNavigate={() => setMobileOpen(false)} onCollapse={() => setMobileOpen(false)} pendingCount={pending.count} />
       </aside>
 
       <div className="flex min-w-0 flex-1 flex-col">
         <header className="z-30 flex h-16 shrink-0 items-center gap-3 border-b border-slate-200/80 bg-white/80 px-4 backdrop-blur-xl sm:px-6">
-          <button type="button" onClick={toggleMenu} aria-label="Toggle menu" title="Toggle menu" className="grid size-9 place-items-center rounded-lg text-slate-500 hover:bg-slate-100 hover:text-slate-800">
+          <button type="button" onClick={toggleMenu} aria-label="Toggle menu" title="Toggle menu" className="relative grid size-9 place-items-center rounded-lg text-slate-500 hover:bg-slate-100 hover:text-slate-800">
             <PanelLeft size={19} />
+            {pending.count > 0 && <span className="absolute right-1.5 top-1.5 size-2 rounded-full bg-amber-500 lg:hidden" aria-label="Approval waiting" />}
           </button>
           <span className="h-6 w-px bg-slate-200" aria-hidden />
           <div className="min-w-0 flex-1">
