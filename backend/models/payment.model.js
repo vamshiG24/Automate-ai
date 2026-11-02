@@ -33,6 +33,13 @@ const paymentSchema = new mongoose.Schema(
       default: "INR",
     },
 
+    // "demo" = PAYMENTS_DEMO_MODE checkout (no money moved)
+    provider: {
+      type: String,
+      enum: ["razorpay", "demo"],
+      default: "razorpay",
+    },
+
     razorpayOrderId: {
       type: String,
       required: true,

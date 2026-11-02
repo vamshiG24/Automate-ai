@@ -1,5 +1,5 @@
 
-import { getRazorpay } from "../config/razorpay.js";
+import { demoPaymentsEnabled, getRazorpay, razorpayConfigured } from "../config/razorpay.js";
 
 import crypto from "crypto";
 import Payment from "../models/payment.model.js";
@@ -20,6 +20,67 @@ const Plans = {
   },
 };
 
+// PAYMENT CONFIG: which checkout the Pricing page should use
+export const getPaymentConfig = (req, res) =>
+  res.status(200).json({
+    razorpay: razorpayConfigured(),
+    demo: demoPaymentsEnabled(),
+  });
+
+// DEMO PURCHASE: adds the plan's credits without Razorpay (no money moved).
+// The server picks credits from the plan, never from the request.
+export const demoPurchase = async (req, res) => {
+  try {
+    if (!demoPaymentsEnabled()) {
+      return res.status(403).json({
+        message: "Demo payments are turned off.",
+      });
+    }
+
+    const selectedPlan = Plans[req.body?.plan];
+
+    if (!selectedPlan) {
+      return res.status(400).json({
+        message: "Invalid plan",
+      });
+    }
+
+    const payment = await Payment.create({
+      userId: req.user._id,
+      plan: req.body.plan,
+      credits: selectedPlan.credits,
+      amount: selectedPlan.amount,
+      currency: "INR",
+      provider: "demo",
+      razorpayOrderId: `demo_${crypto.randomUUID()}`,
+      status: "paid",
+    });
+
+    const user = await User.findByIdAndUpdate(
+      req.user._id,
+      { $inc: { credits: payment.credits } },
+      { returnDocument: "after" }
+    );
+
+    if (!user) {
+      throw new Error("User not found");
+    }
+
+    return res.status(200).json({
+      message: "Demo payment successful",
+      demo: true,
+      creditsAdded: payment.credits,
+      remainingCredits: user.credits,
+    });
+  } catch (error) {
+    console.error("Demo payment error:", error);
+
+    return res.status(500).json({
+      message: "Unable to complete demo payment",
+    });
+  }
+};
+
 // CREATE ORDER
 export const createOrder = async (req, res) => {
   try {
@@ -37,6 +98,12 @@ export const createOrder = async (req, res) => {
     if (!selectedPlan) {
       return res.status(400).json({
         message: "Invalid plan",
+      });
+    }
+
+    if (!razorpayConfigured()) {
+      return res.status(503).json({
+        message: "Payments aren't set up yet: add RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET (test keys) to backend/.env, or set PAYMENTS_DEMO_MODE=true for a demo checkout, then restart the server.",
       });
     }
 
@@ -74,6 +141,13 @@ export const createOrder = async (req, res) => {
     });
   } catch (error) {
     console.error("Create order error:", error);
+
+    // Razorpay answers 401 when the key id / secret pair is wrong
+    if (error?.statusCode === 401) {
+      return res.status(502).json({
+        message: "Razorpay rejected the API keys. Check RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET in backend/.env (both from the same Test mode key) and restart the server.",
+      });
+    }
 
     return res.status(500).json({
       message: "Unable to create order",

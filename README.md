@@ -25,7 +25,7 @@ Users create their own **custom agents** (name, instructions, model, temperature
 | Chat history sidebar | Conversations grouped by date, with search, rename, pin and delete. Pending approvals survive a page refresh |
 | Memory | LangGraph MongoDB checkpointer keeps each conversation's state per user and per agent |
 | Integrations | Google OAuth (Gmail and Calendar) and Facebook Login for Business (Instagram). Each user connects their own accounts |
-| Credits and payments | Credits are checked before every AI call. Razorpay orders are verified with HMAC signatures and credits are added atomically |
+| Credits and payments | Credits are checked before every AI call. Razorpay orders are verified with HMAC signatures and credits are added atomically. No Razorpay account? `PAYMENTS_DEMO_MODE=true` gives a clearly labelled demo checkout (never in production) |
 | Image understanding | Upload an image (Cloudinary) and ask about it (Google Gemini Vision), or turn it into an Instagram post |
 
 ## Architecture
@@ -119,7 +119,7 @@ Live safety numbers per user are on the Agent Teams page and at `GET /api/approv
 ## Getting started
 
 ### Prerequisites
-Node.js 20+, a MongoDB Atlas cluster, and API keys for Groq, Google (OAuth client + Gemini), Firebase, Razorpay (test mode) and Cloudinary. Instagram needs a Meta app.
+Node.js 20+, a MongoDB Atlas cluster, and API keys for Groq, Google (OAuth client + Gemini), Firebase, Razorpay (test mode, or set `PAYMENTS_DEMO_MODE=true` to demo without an account) and Cloudinary. Instagram needs a Meta app.
 
 ### Backend
 ```bash
@@ -168,6 +168,7 @@ node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
 | PATCH | `/api/auth/settings` | Toggle auto-approve for low-risk actions |
 | GET | `/api/integrations` | Connected accounts |
 | POST | `/api/payment/create`, `/api/payment/verify` | Buy credits |
+| GET / POST | `/api/payment/config`, `/api/payment/demo` | Checkout type; demo purchase (demo mode only) |
 
 ## Project structure
 
